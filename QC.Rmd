@@ -1,0 +1,574 @@
+---
+title: "QC FOR a sequence run "
+author: "Created by: William, Modified by: Yisihak"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+---
+
+**Load libraries and working directory**
+```{r load libraries, echo=FALSE, warning = FALSE, message= FALSE}
+
+library(dplyr)
+library(magrittr)
+library(ggplot2)
+library(reshape2)
+library(tidyr)
+library(tidyverse)
+library(stringr)
+library(tools)
+library(purrr)
+library(parallel)
+library(data.table)
+library(vctrs)
+library(plotly)
+# library(trelliscopejs)
+library(shiny)
+library(htmltools)
+library(htmlwidgets)
+library(viridis)
+library(gridExtra)
+library(ggrepel)
+library(readxl)
+library(scales)
+
+```
++
+
+# import Allele and pool data  
+
+```{r assign Allele by pseudo cigars, echo=FALSE, warning = FALSE, message= FALSE}
+
+allele_data_run4 <- read.table("C:/Users/Y/Desktop/tes_multiple_run_result/run4/allele_data.txt", sep = "\t", header = T) %>%
+  select(SampleID) %>%
+  distinct()
+
+allele_data_run4$SampleID <- gsub("_S.*","",allele_data_run4$SampleID)
+
+
+allele_data_run5 <- read.table("C:/Users/Y/Desktop/tes_multiple_run_result/run5/allele_data.txt", sep = "\t", header = T) %>%
+  select(SampleID) %>%
+  distinct()
+
+allele_data_run5$SampleID <- gsub("_S.*","",allele_data_run5$SampleID)
+
+allele_data_run9 <- read.table("C:/Users/Y/Desktop/tes_multiple_run_result/run9/allele_data.txt", sep = "\t", header = T) %>%
+  select(SampleID) %>%
+  distinct()
+
+allele_data_run9$SampleID <- gsub("_S.*","",allele_data_run9$SampleID)
+
+
+allele_data_combined <- rbind(allele_data_run4,allele_data_run5,allele_data_run9) %>%
+  group_by(SampleID, Locus, ASV, Allele, PseudoCIGAR) %>%
+  mutate(Reads = sum(Reads)) %>%
+  ungroup() %>%
+  distinct()
+
+
+allele_data <- allele_data_combined %>% 
+  group_by(SampleID, Locus) %>% 
+  mutate(reads = sum(Reads)) %>% 
+  ungroup() %>% 
+  group_by(Locus) %>%
+  filter(all(reads > 100)) %>%     # keep rows where the locus has >100 reads in all samples
+  distinct(Locus) 
+
+### Rearrange Allele by PseudoCIGAR (not asv - variations in masked regions are not considered!)
+cigar <- allele_data %>% 
+  select (Locus, PseudoCIGAR) %>% 
+  group_by(Locus) %>% 
+  distinct(PseudoCIGAR) %>% 
+  arrange(Locus) %>%
+  dplyr::mutate(type = paste0("t", dplyr::cur_group_id()))
+cigar$Allele <- paste(cigar$type, rowid(cigar$type), sep = ".")
+
+### Make concatenated allele data
+cigar_select <- cigar %>% select(Locus, PseudoCIGAR, Allele)
+allele_data <- left_join(allele_data, cigar_select)
+allele_data %<>%
+  distinct(SampleID, Locus, PseudoCIGAR, Allele, .keep_all = TRUE) %>%
+  group_by(SampleID, Locus) %>%
+  mutate(norm.reads.locus = Reads/sum(Reads))%>%
+  mutate(n.alleles = n()) %>% 
+  arrange(SampleID, Locus)
+
+
+# Import pool1A info
+pool_1A <- read_tsv("C:/Users/Y/Desktop/mad4hatter_pool_info/Pool1A-Diversity.tsv", trim_ws = TRUE) %>%
+  rename("Locus" = "locus-pool")
+
+# Import pool5 info
+pool_1B <- read_tsv("C:/Users/Y/Desktop/mad4hatter_pool_info/Pool1B-Resitance+.tsv", trim_ws = TRUE) %>%
+  rename("Locus" = "locus-pool")
+
+# Import pool2 info
+pool_2 <- read_tsv("C:/Users/Y/Desktop/mad4hatter_pool_info/Pool2-Resistance+.tsv", trim_ws = TRUE) %>%
+  rename("Locus" = "locus-pool")
+
+```
+
+
+**Preview raw data - sample size, loci numbers, allele numbers**
+```{r preview data info, echo=FALSE, warning = FALSE, message= FALSE}
+
+data <- allele_data
+  
+# Overall range of the data
+sample_size <- n_distinct(data$SampleID)
+print(sprintf("Sample size= %s", sample_size))
+
+Locus_no <- n_distinct(data$Locus)
+print(sprintf("All Locus = %s", Locus_no))
+
+# Count number of alleles per Locus per sample
+allele_count <- data %>% 
+  group_by(Locus) %>% 
+  summarize(n.alleles = n_distinct(Allele)) %>% 
+  arrange(-n.alleles)
+# Allele range in each sample
+print(sprintf("%s to %s alleles per Locus per sample",
+              min(allele_count$n.alleles), max(allele_count$n.alleles)))
+
+```
+
+
+# Data QC and filtering 
+(1) Filter out bad-quality samples and possible false positive alleles (off-targets, low-abundance)
+
+**Step 1. Total Reads**
+```{r filter total reads, echo=FALSE, warning = FALSE, message= FALSE}
+
+## Plot total Reads distribution - NC, PC, Samples
+plot_Reads_dist <- function(data){
+
+  # Summarize total reads for a sample
+  Reads_table <- data %>% 
+  distinct(SampleID, Locus, Allele, .keep_all = TRUE) %>%
+  group_by(SampleID) %>% 
+  summarize(Total_Reads = sum(Reads)) %>% 
+  arrange(Total_Reads) 
+
+  #Plot
+  g <- ggplot(Reads_table, aes(x = log10(Total_Reads))) +
+  geom_density(alpha = .5) +
+  ggtitle("Total Reads distribution")
+  g
+}
+
+plot_Reads_dist(data)
+
+
+## Visualize samples with low Reads: Pool1A5 has 217 loci, at least each loci has 50 Reads, so total reads cutoff will be 217*50 (1A5+2 has 237 loci)
+
+plot_Reads_cutoff <- function(data, loci = 237, Reads_cutoff = 50){
+
+  # Summarize total Reads
+  Reads_table <- data %>% 
+  distinct(SampleID, Locus, Allele, .keep_all = TRUE) %>%
+  group_by(SampleID) %>% 
+  summarize(Total_Reads = sum(Reads)) %>% 
+  arrange(Total_Reads) 
+  
+  # Set up Reads criterion
+  Reads_criterion <- loci*Reads_cutoff
+  sample_low_Reads <- Reads_table %>% 
+    filter(Total_Reads < Reads_criterion) %>% pull(SampleID)
+  
+  # Make plotting df
+  Reads_table %<>%
+   mutate(QC = case_when(
+    SampleID %in% sample_low_Reads ~ "Low-Reads samples",
+    TRUE ~ "QC-passed samples")) %>%
+    mutate(color = case_when(
+    SampleID %in% sample_low_Reads ~ "gray",
+    TRUE ~ "black")) %>%
+    arrange(factor(QC, levels = c("Low-Reads samples", "QC-passed samples"))) 
+
+  color_axis <- Reads_table$color[order(Reads_table$SampleID)]
+  color_fill <- c("Low-Reads samples" = "gray", "QC-passed samples" = "black")
+
+  level_order <- Reads_table$SampleID
+
+  # Plot
+  g <- Reads_table %>%
+    ggplot(aes(x = factor(SampleID, level = level_order), y = log10(Total_Reads), fill = QC)) +
+    geom_bar(stat = "identity") + 
+    coord_flip() + 
+    scale_fill_manual(values = color_fill) +
+    theme_classic() +
+    theme(axis.text.y=element_blank()) +
+    geom_hline(yintercept = log10(Reads_criterion), linetype='dashed', color = 'red')+
+    ylab("Log10 Total Reads") +
+    xlab("SampleID") +
+    ggtitle(paste0("Filter out samples with <",Reads_cutoff," * 237 reads"))
+  g
+}
+
+
+plot_Reads_cutoff(data, loci = 237, Reads_cutoff = 50)
+
+
+### Filter 2: Remove samples with few reads
+
+remove_low_Reads_samples <- function(data, loci = 237, Reads_cutoff = 50){
+  # Summarize total Reads
+  Reads_table <- data %>% 
+    distinct(SampleID, Locus, Allele, .keep_all = TRUE) %>%
+    group_by(SampleID) %>% 
+    summarize(Total_Reads = sum(Reads)) %>% 
+    arrange(Total_Reads)
+  
+  # Set up Reads criterion
+  Reads_criterion <- loci * Reads_cutoff
+  sample_low_Reads <- Reads_table %>%
+    filter(Total_Reads < Reads_criterion) %>% pull(SampleID)
+
+  clean_data <- data %>% filter(! SampleID %in% unique(c(sample_low_Reads))) 
+  sample_size <- n_distinct(clean_data$SampleID)
+  clean_data_info <- sprintf("Step 1 - Sample size after removing samples with insufficient reads = %s, Retained prop. = %s", sample_size, ... = round(sample_size/n_distinct(data$SampleID), 2))
+
+  return(list(clean_data = clean_data, clean_data_info = clean_data_info, removed_SampleID = sample_low_Reads))
+}
+
+# Example usage:
+result <- remove_low_Reads_samples(data)
+filtered_data1 <- result$clean_data  # This will give you the data after removing low-Reads samples
+print(result$clean_data_info)  # This will print the information of filtered data compared to original input data
+sample_low_reads <- print(result$removed_SampleID) # This will print the information of removed SampleID
+
+##WL: export names of the filtered samples
+if (length(result$removed_SampleID) > 0) {
+  filtered_list1 <- data.frame(as.list(result$removed_SampleID)) %>%
+  transpose() %>%
+  rename("SampleID" = "V1") %>%
+  mutate(StudySubject = word(SampleID, 1, sep = "_")) %>%
+  select(SampleID, StudySubject) %>%
+  mutate(Reason = "Few Total Reads")
+} else {
+  filtered_list1 <- data.frame(SampleID = character(), StudySubject = character(), Reason = character())
+}
+
+```
+
+
+**Step 2. Loci coverage** 
+
+```{r filter loci coverage, echo=FALSE, warning = FALSE, message= FALSE}
+
+## Total loci distribution and summary by RUN
+
+plot_loci_dist <- function(data){
+
+  # Data    
+  clone <- data %>%
+    group_by(SampleID, Locus) %>% 
+    summarise(total_loci = n()) %>%
+    mutate(Clone = ifelse(total_loci == 1, "Mono", "Poly"))
+  clone %<>% group_by(SampleID) %>% count(Clone)
+
+  clone_wide <- clone %>% pivot_wider(names_from = Clone, values_from = n)
+  clone_wide[is.na(clone_wide)] <- 0
+  clone_wide %<>% mutate(Total_loci = Mono + Poly) %>% 
+    mutate(Mono_prop = Mono/Total_loci) %>% 
+    mutate(Poly_prop = Poly/Total_loci) %>%
+    arrange(- Poly_prop)
+
+  clone_wide_select <- clone_wide %>% select(SampleID, Poly_prop) 
+  clone <- merge(clone, clone_wide_select, by = "SampleID")
+  clone %<>% arrange(- Poly_prop)
+
+  # Plot
+  g <- ggplot(clone_wide, aes(x = Total_loci)) +
+    geom_histogram() +
+    scale_x_continuous(breaks = seq(0, 300, 25)) 
+  g
+
+}
+
+plot_loci_dist(filtered_data1)
+
+
+
+### Visualize samples with insufficient coverage of loci
+
+plot_loci_cutoff <- function(data, loci = 237, perc_covered = 0.7){
+
+  # Data    
+  clone <- data %>%
+    group_by(SampleID, Locus) %>% 
+    summarise(total_loci = n()) %>%
+    mutate(Clone = ifelse(total_loci == 1, "Mono", "Poly"))
+  clone %<>% group_by(SampleID) %>% count(Clone)
+
+  clone_wide <- clone %>% pivot_wider(names_from = Clone, values_from = n)
+  clone_wide[is.na(clone_wide)] <- 0
+  clone_wide %<>% mutate(Total_loci = Mono + Poly) %>% 
+    mutate(Mono_prop = Mono/Total_loci) %>% 
+    mutate(Poly_prop = Poly/Total_loci) %>%
+    arrange(- Poly_prop)
+
+  clone_wide_select <- clone_wide %>% select(SampleID, Poly_prop) 
+  clone <- merge(clone, clone_wide_select, by = "SampleID")
+  clone %<>% arrange(- Poly_prop) 
+
+  # Set up loci criterion
+  loci_criterion <- round(loci*perc_covered)
+
+  sample_less_loci <- clone %>%
+    group_by(SampleID) %>%
+    summarize(total_loci = sum(n)) %>%
+    filter(total_loci < loci_criterion) %>% 
+    pull(SampleID)
+
+  # Plot
+  g <- clone %>%
+    ggplot(aes(x = reorder(SampleID, Poly_prop), y = n)) +
+    geom_col(aes(fill = Clone)) +
+    theme(axis.text.y=element_blank()) +
+    coord_flip()+
+    scale_y_continuous(name = "No. of Locus", breaks = seq(0,200, by = 50)) +
+    geom_hline(yintercept = loci_criterion, linetype='dotted', col = 'black') +
+    xlab("SampleID") +
+    ggtitle("Filter out samples with insufficient loci coverage") 
+  g
+}
+
+
+
+plot_loci_cutoff(filtered_data1, loci = 237, perc_covered = 0.7)
+
+
+### Filter out samples with insufficient loci coverage
+remove_low_loci_samples <- function(data, loci = 237, perc_covered = 0.7){
+  
+  # Data    
+  clone <- data %>%
+    group_by(SampleID, Locus) %>% 
+    summarise(total_loci = n()) %>%
+    mutate(Clone = ifelse(total_loci == 1, "Mono", "Poly"))
+  clone %<>% group_by(SampleID) %>% count(Clone)
+  
+  clone_wide <- clone %>% pivot_wider(names_from = Clone, values_from = n)
+  clone_wide[is.na(clone_wide)] <- 0
+  clone_wide %<>% mutate(Total_loci = Mono + Poly) %>% 
+    mutate(Mono_prop = Mono/Total_loci) %>% 
+    mutate(Poly_prop = Poly/Total_loci) %>%
+    arrange(- Poly_prop)
+  
+  clone_wide_select <- clone_wide %>% select(SampleID, Poly_prop) 
+  clone <- merge(clone, clone_wide_select, by = "SampleID")
+  clone %<>% arrange(- Poly_prop) 
+  
+  # Set up loci criterion
+  loci_criterion <- round(loci*perc_covered)
+  sample_less_loci <- clone %>%
+    group_by(SampleID) %>%
+    summarize(total_loci = sum(n)) %>%
+    filter(total_loci < loci_criterion) %>% 
+    pull(SampleID)
+  
+  clean_data <- data %>% filter(! SampleID %in% sample_less_loci) 
+  sample_size <- n_distinct(clean_data$SampleID)
+  clean_data_info <- sprintf("Step 2 - Sample size after removing samples with insufficeint loci coverage = %s, Retained prop. = %s", sample_size, round(sample_size/n_distinct(data$SampleID), 2))
+  
+  
+  return(list(clean_data = clean_data, clean_data_info = clean_data_info, removed_SampleID = sample_less_loci))
+}
+
+# Example usage:
+result <- remove_low_loci_samples(filtered_data1)
+filtered_data2 <- result$clean_data  # This will give you the data after removing low-loci-coverage samples
+print(result$clean_data_info)  # This will print the information of filtered data compared to original input data
+sample_less_loci <- print(result$removed_SampleID) # This will print the information of removed SampleID
+
+##WL: export names of the filtered samples
+if (length(result$removed_SampleID) > 0) {
+  filtered_list2 <- data.frame(as.list(result$removed_SampleID)) %>%
+    transpose() %>%
+    rename("SampleID" = "V1") %>%
+    mutate(StudySubject = word(SampleID, 1, sep = "_")) %>%
+    select(SampleID, StudySubject) %>%
+    mutate(Reason = "Insufficient locus coverage")
+} else {
+  filtered_list2 <- data.frame(SampleID = character(), StudySubject = character(), Reason = character())
+}
+
+
+```
+
+
+**Step 3: Proportion of loci > 100 Reads in samples**
+```{r filter n100 proportion, echo=FALSE, warning = FALSE, message= FALSE}
+
+pool_1Ax <- pool_1A %>% select(Locus, Category)
+pool_1Bx <- pool_1B %>% select(Locus, Category)
+pool_2x <- pool_2 %>%select(Locus, Category)
+pool_cat <- rbind(pool_1Ax, pool_1Bx, pool_2x)
+
+filtered_data2 <- filtered_data2 %>%
+  group_by(Locus) %>%
+  mutate(Pool = sapply(strsplit(Locus,"-"),tail,1)) %>%
+  ungroup() %>%
+  left_join(pool_cat, by = "Locus")
+  
+
+### Calculate loci having 100 Reads (n100) and plot n100 by gene categories
+
+plot_n100_loci_cutoff <- function(data, n100_cutoff = 0.5){ 
+
+  # Group by sample + loci category
+  Locus_cov_100 <- data %>% 
+    group_by(SampleID, Locus, Category, Pool) %>% 
+    summarize(Reads = sum(Reads)) %>% 
+    ungroup() 
+
+ # Calculate n100 and n50 loci counts
+  Locus_cov_100 %<>%
+    group_by(SampleID, Category, Pool) %>% 
+    summarize(total_Reads = sum(Reads), n100 = sum(Reads >= 100)) 
+  
+  # Normalization - calculate % loci with n100 or n50 (Species targets are not counted)
+  amp_cov_category_norm <- Locus_cov_100 %>% 
+    filter(Category != "Species") %>%
+    mutate(norm_100 = case_when(
+      Category == "Diversity" ~ n100/165,
+      Category == "Resistance" ~ n100/38,
+      Category == "Immune" ~ n100/5,
+      Category == "Diagnostic" ~ n100/30))
+  
+  # Plot
+  g <- ggplot(amp_cov_category_norm, aes(x=total_Reads, y = norm_100)) +
+    geom_point(aes(color = "red", alpha = 0.5)) +
+    scale_x_log10() + 
+    geom_hline(yintercept = n100_cutoff, linetype = "dashed", color = "black") +
+    facet_wrap(~ Category) +
+    ggtitle("Normalized prop. of loci with > 100 Reads in each sample") +
+    ylim(0,1) +
+    ylab("Proportion of loci with >100 Reads") +
+    xlab("Total Reads")
+  g
+}  
+
+plot_n100_loci_cutoff(filtered_data2, n100_cutoff = 0.5) 
+
+
+### Plot n100 proportion & sample retained
+
+plot_n100_sample_cutoff <- function(data, n100_cutoff = 0.5){
+  
+  # Group by sample + loci category
+Locus_cov_100 <- data %>% 
+  group_by(SampleID, Locus, Category, Pool) %>% 
+  summarize(Reads = sum(Reads)) %>% 
+  ungroup() 
+
+n_table <- Locus_cov_100 %>%
+  filter(Category == "Diversity") %>%
+  group_by(SampleID, Locus) %>% 
+  summarize(total_Reads = sum(Reads)) %>%
+  mutate(n100 = ifelse(total_Reads >= 100, 1, 0))
+
+n_count <-  n_table  %>%
+  group_by(SampleID) %>%
+  summarise(
+    n100_0_count = sum(n100 == 0),
+    n100_1_count = sum(n100 == 1),
+    n100_proportion = n100_1_count / n())
+
+# Create a data frame to store the results
+results <- data.frame(X = numeric(), SampleCount = numeric())
+
+# Loop through different threshold values
+for (X in 0:100) {
+  filtered_data <- n_count %>%
+    filter(n100_proportion >= (X / 100))  # Convert X to a proportion
+
+  # Add X and the count of samples exceeding the threshold to the results data frame
+  results <- rbind(results, data.frame(X = X, SampleCount = nrow(filtered_data)))
+}
+
+# Create the plot showing tradeoffs between n100 proportion & sample retained
+g <- ggplot(results, aes(x = SampleCount, y = X)) +
+  geom_line() +
+  geom_hline(yintercept = n100_cutoff*100, linetype = "dashed", color = "black", alpha = .5) +
+  labs(y = "Proportion of loci over 100 Reads", x = "Sample count") +
+  scale_x_continuous(breaks = seq(0, 1250, 100))
+g
+
+}
+
+
+
+
+plot_n100_sample_cutoff(filtered_data2, n100_cutoff = 0.5)
+
+
+### Remove samples with too low n100
+remove_n100_cutoff <- function(data, n100_cutoff = 0.5){
+  # Group by sample + loci category
+  Locus_cov_100 <- data %>% 
+    group_by(SampleID, Locus, Category, Pool) %>% 
+    summarize(Reads = sum(Reads)) %>% 
+    ungroup() 
+  
+  # Calculate n100 and n50 loci counts
+  Locus_cov_100 <- Locus_cov_100 %>%
+    group_by(SampleID, Category, Pool) %>% 
+    summarize(total_Reads = sum(Reads), n100 = sum(Reads >= 100)) 
+  
+  # Normalization - calculate % loci with n100 or n50 (Species targets are not counted)
+  amp_cov_category_norm <- Locus_cov_100 %>% 
+    filter(Category != "Species") %>%
+    mutate(norm_100 = case_when(
+    Category == "Diversity" ~ n100/165,
+    Category == "Resistance" ~ n100/38,
+    Category == "Immune" ~ n100/5,
+    Category == "Diagnostic" ~ n100/30))
+  
+  # Remove samples with diversity n100 < 50%
+  sample_n100_fail <-  amp_cov_category_norm %>% filter(Category == "Diversity") %>% filter(norm_100 < n100_cutoff) %>% pull(SampleID)
+  clean_data <- data %>% filter(! SampleID %in% sample_n100_fail) 
+  sample_size <- n_distinct(clean_data$SampleID)
+  clean_data_info <- sprintf("Step 3 - Sample size after removing samples with less than n100 cutoff = %s, Retained prop. = %s",   sample_size, round(sample_size/n_distinct(data$SampleID), 2))
+  
+  return(list(clean_data = clean_data, clean_data_info = clean_data_info, removed_SampleID = sample_n100_fail))
+}
+
+
+# Example usage:
+result <- remove_n100_cutoff(filtered_data2, n100_cutoff = 0.5)
+filtered_data3 <- result$clean_data  # This will give you the data after removing low-loci-coverage samples
+print(result$clean_data_info)  # This will print the information of filtered data compared to original input data
+sample_n100_fail <- print(result$removed_SampleID) # This will print the information of removed SampleID
+
+##WL: export names of the filtered samples
+filtered_list3 <- data.frame(as.list(result$removed_SampleID)) %>%
+  transpose() %>%
+  rename("SampleID" = "V1") %>%
+  mutate(StudySubject = word(SampleID, 1, sep = "_")) %>%
+  select(SampleID, StudySubject) %>%
+  mutate(Reason = "Less than 50% loci covered")
+
+```
+
+
+**Export list of sample IDs that need to be redone**
+```{r redos, echo=FALSE, warning = FALSE, message= FALSE}
+
+### Filtered data: Remove bad-quality samples only 
+redos <- rbind(filtered_list1, filtered_list2, filtered_list3)
+
+filtered_data_final <- filtered_data3 %>% 
+  group_by(SampleID, Locus) %>%
+  mutate(norm.Reads.Locus = Reads/sum(Reads)) %>% 
+  ungroup() %>% 
+  filter(Category == "Diversity")
+
+
+```
+
+
