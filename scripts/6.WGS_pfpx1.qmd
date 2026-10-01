@@ -1,0 +1,169 @@
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(readr)
+library(scales)
+
+
+seekdeep_output_tes_1 <- readr::read_tsv("../data/WGS/Input/seekdeep_output_tes.tsv")
+
+metadata_tes <- seekdeep_output_tes_1 %>%
+  select(Sample, Treatment) %>%
+  distinct()
+wide_sample_tes <- seekdeep_output_tes_1 %>%
+  mutate(
+    mutation_status = ifelse(reference_AA == AA, "wildtype", "mutant"),
+    mutation_test = ifelse(
+      reference_AA == AA,
+      paste0("0", "(", AA_freq, ")"),
+      paste0(reference_AA, reference_AA_pos, AA, "(", AA_freq, ")")
+    )
+  ) %>%
+  select(Sample, Gene, reference_AA_pos, mutation_test) %>%
+  group_by(Gene, reference_AA_pos, Sample) %>%
+  summarise(
+    mutation_test = paste(unique(mutation_test), collapse = ";"),
+    .groups = "drop"
+  ) %>%
+  left_join(metadata_tes, by = "Sample")
+
+
+totals <- wide_sample_tes %>%
+  group_by(Treatment) %>%
+  summarise(total_samples = n_distinct(Sample))
+
+# Mutation frequencies
+px1_target <- wide_sample_tes%>%
+#   filter(Gene == "PX1", reference_AA_pos %in% c("1222", "1701", "1705")) %>%
+  select(Sample, Gene, reference_AA_pos, mutation_test, Treatment) %>%
+  # pivot_wider(names_from = reference_AA_pos, values_from = mutation_test) %>%
+  mutate(
+    mutation = case_when(
+      grepl("D1705N", mutation_test) ~ "D1705N",
+      grepl("L1222P", mutation_test) ~ "L1222P",
+      grepl("M1701I", mutation_test) ~ "M1701I",
+      TRUE ~ "WT"
+    )
+  )%>%
+  select(-mutation_test)%>%
+  pivot_wider(names_from = reference_AA_pos, values_from = mutation) %>%
+
+  mutate(haplotype = paste(`1222`, `1701`, `1705`, sep = "/")) %>%
+  select(Sample, haplotype, Treatment)%>%
+  left_join(totals, by = "Treatment") %>%
+  group_by(Treatment, haplotype,total_samples) %>%
+  summarise(count = n(), .groups = "drop")%>%
+  mutate(freq = count / total_samples)
+
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+# ---------------------------------------------------------
+# 1. Set treatment order
+# ---------------------------------------------------------
+px1_target$Treatment <- factor(
+  px1_target$Treatment,
+  levels = c("Ts", "Tf0", "Tf")
+)
+
+# ---------------------------------------------------------
+# 2. Create stacking positions
+#    Lowest frequency = bottom
+#    Highest frequency = top
+# ---------------------------------------------------------
+px1_target <- px1_target %>%
+  group_by(Treatment) %>%
+  arrange(freq, .by_group = TRUE) %>%
+  mutate(
+    ymin = cumsum(freq) - freq,
+    ymax = cumsum(freq),
+    ymid = (ymin + ymax) / 2
+  ) %>%
+  ungroup()
+
+#
+# 
+ggsave(
+  filename = "../data/WGS/Results/PX1_haplotype_barplot.pdf",
+  width = 8,
+  height = 6,
+  units = "in"
+)
+# ---------------------------------------------------------
+# 3. Plot
+# ---------------------------------------------------------
+ggplot(px1_target, aes(x = Treatment)) +
+
+  # Stacked bars
+  geom_rect(
+    aes(
+      xmin = as.numeric(Treatment) - 0.35,
+      xmax = as.numeric(Treatment) + 0.35,
+      ymin = ymin,
+      ymax = ymax,
+      fill = haplotype
+    )
+  ) +
+
+  # Count / total labels
+  geom_text(
+    aes(
+      x = Treatment,
+      y = ymid,
+      label = paste0(count, "/", total_samples)
+    ),
+    size = 4,
+    color = "white"
+  ) +
+
+  # Y axis: percentage
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1),
+    limits = c(0, 1),
+    breaks = seq(0, 1, 0.25),
+    expand = c(0, 0)
+  ) +
+
+  # X-axis labels
+scale_x_discrete(
+  labels = c(
+    "Ts"  = "Treatment\nSuccess\n(Day 0)",
+    "Tf0" = "Treatment\nSuccess\n(Day 0)",
+    "Tf"  = "Treatment\nFailure\n(Day of failure)"
+  )
+) +
+
+  # Your colors
+  scale_fill_manual(
+    values = c(
+      "WT/WT/WT" = "#66c2a5",
+      "WT/M1701I/WT" = "#fc8d62",
+      "L1222P/M1701I/D1705N" = "#8da0cb",
+      "NA/M1701I/D1705N" = "#e78ac3"
+    ),
+    drop = FALSE
+  ) +
+
+  labs(
+    x = "Treatment",
+    y = "Percentage",
+    fill = "Haplotype"
+  ) +
+
+  theme_classic() +
+
+theme(
+  axis.text.x = element_text(
+    size = 14,
+    lineheight = 1.0
+  ),
+  axis.title.x = element_text(size = 16),
+  axis.text.y = element_text(size = 12),
+  axis.title.y = element_text(size = 16),
+  legend.text = element_text(size = 11),
+  legend.title = element_text(size = 12)
+)
+  dev.off()
+```

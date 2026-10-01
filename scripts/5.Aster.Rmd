@@ -1,0 +1,67 @@
+---
+title: "Aster"
+author: "Inna Gerlovina"
+date: "2025-08-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+# install.packages("remotes")
+# remotes::install_github("EPPIcenter/asterTES")
+
+library(asterTES)
+library(readr)
+library(dcifer)
+```
+
+
+```{r}
+dfppl <- read_csv("../data/Aster/Input/dfppl_abobo.csv")
+dfsmp <- read_csv("../data/Aster/Input/dfsmp_abobo.csv")
+dfgen <- read_csv("../data/Aster/Input/dfgen_abobo.csv")
+
+
+dsmp <- formatDat(dfgen, svar = "smp_id", lvar = "locus", avar = "allele")
+dsmp <- dsmp[dfsmp$smp_id]   # same order as dfsmp
+
+# dsmp <- Filter(Negate(is.null), dsmp)
+
+coi  <- getCOI(dsmp, lrank = 2)
+
+# print(coi)
+
+# D0 only to calculate afreq and rbg
+ismp0 <- dfsmp$day == 0
+afreq <- calcAfreq(dsmp[ismp0], coi[ismp0], tol = 1e-5)
+minfr <- 1/sum(coi)
+afreq <- lapply(afreq, function(af, minfr) {af[af == 0] <- minfr; af/sum(af)},
+                minfr = minfr)                 # fill in 0-frequencies
+
+rhat <- ibdDat(dsmp[ismp0], coi[ismp0], afreq, pval = FALSE)
+rbg  <- mean(rhat, na.rm = TRUE)
+
+
+pdbreaks <- c(0, 10, 1000, 10000, Inf)
+pmiss    <- c(0.5, 0.2, 0.1, 0.05)
+pd2pdet <- function(x, breaks, labs) {
+  y <- cut(x, breaks, labels = labs, include.lowest = FALSE)
+  return(1 - as.numeric(as.character(y)))
+}
+
+dfsmp$pdet <- pd2pdet(dfsmp$parasite_dens, pdbreaks, pmiss)
+
+
+res <- asterKM(dsmp, dfppl, dfsmp, coi, afreq, rbg, pprior = 0.5, 
+               update_est = TRUE)
+res$failure_rate
+#> [1] 0.1447888
+head(res$classification)
+aster_clas <- as.data.frame(res$classification)
+
+write_csv(aster_clas, "../data/Aster/Results/aster_result_abobo.csv")
+```

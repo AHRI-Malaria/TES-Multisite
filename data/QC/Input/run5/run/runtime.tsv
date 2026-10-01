@@ -1,0 +1,187 @@
+PipelineVersion	v0.2.1
+ContainerEngine	docker
+Duration	1m 29s
+CommandLine	nextflow run main.nf --readDIR ../TES_fastq/run5/ --outDIR ./TES_run5_output --target v4 -profile docker --sequencer nextseq -config conf/custom.config
+CommitId	null
+Complete	2026-08-18T05:17:47.809043219-07:00
+ConfigFiles	/home/yisihak/madhatter_lshtm_server_clone/nextflow.config, /home/yisihak/madhatter_lshtm_server_clone/conf/custom.config
+Container	eppicenter/mad4hatter:sha-110d09e
+ErrorMessage	The following object is masked from ‘package:base’:
+
+    strsplit
+
+Loading required package: rtracklayer
+
+Attaching package: ‘dplyr’
+
+The following objects are masked from ‘package:Biostrings’:
+
+    collapse, intersect, setdiff, setequal, union
+
+The following object is masked from ‘package:XVector’:
+
+    slice
+
+The following objects are masked from ‘package:GenomicRanges’:
+
+    intersect, setdiff, union
+
+The following object is masked from ‘package:GenomeInfoDb’:
+
+    intersect
+
+The following objects are masked from ‘package:IRanges’:
+
+    collapse, desc, intersect, setdiff, slice, union
+
+The following objects are masked from ‘package:S4Vectors’:
+
+    first, intersect, rename, setdiff, setequal, union
+
+The following objects are masked from ‘package:BiocGenerics’:
+
+    combine, intersect, setdiff, union
+
+The following objects are masked from ‘package:stats’:
+
+    filter, lag
+
+The following objects are masked from ‘package:base’:
+
+    intersect, setdiff, setequal, union
+
+Loading required package: iterators
+Loading required package: parallel
+Error in .Call2("fasta_index", filexp_list, nrec, skip, seek.first.rec,  : 
+  reading FASTA file PkPfPmPoPv.fasta: ">" expected at beginning of line 1
+Calls: <Anonymous> -> .read_XStringSet -> fasta.index -> .Call2
+Execution halted
+ErrorReport	Error executing process > 'DENOISE_AMPLICONS_2:PREPARE_REFERENCE_SEQUENCES:CREATE_REFERENCE_FROM_GENOMES'
+
+Caused by:
+  Process `DENOISE_AMPLICONS_2:PREPARE_REFERENCE_SEQUENCES:CREATE_REFERENCE_FROM_GENOMES` terminated with an error exit status (1)
+
+
+Command executed:
+
+  Rscript /home/yisihak/madhatter_lshtm_server_clone/bin/create_reference_from_genomes.R     --ampliconFILE v4_amplicon_info.tsv     --genome PkPfPmPoPv.fasta     --output v4_reference.fasta     --ncores 12
+
+Command exit status:
+  1
+
+Command output:
+  (empty)
+
+Command error:
+  The following object is masked from ‘package:base’:
+  
+      strsplit
+  
+  Loading required package: rtracklayer
+  
+  Attaching package: ‘dplyr’
+  
+  The following objects are masked from ‘package:Biostrings’:
+  
+      collapse, intersect, setdiff, setequal, union
+  
+  The following object is masked from ‘package:XVector’:
+  
+      slice
+  
+  The following objects are masked from ‘package:GenomicRanges’:
+  
+      intersect, setdiff, union
+  
+  The following object is masked from ‘package:GenomeInfoDb’:
+  
+      intersect
+  
+  The following objects are masked from ‘package:IRanges’:
+  
+      collapse, desc, intersect, setdiff, slice, union
+  
+  The following objects are masked from ‘package:S4Vectors’:
+  
+      first, intersect, rename, setdiff, setequal, union
+  
+  The following objects are masked from ‘package:BiocGenerics’:
+  
+      combine, intersect, setdiff, union
+  
+  The following objects are masked from ‘package:stats’:
+  
+      filter, lag
+  
+  The following objects are masked from ‘package:base’:
+  
+      intersect, setdiff, setequal, union
+  
+  Loading required package: iterators
+  Loading required package: parallel
+  Error in .Call2("fasta_index", filexp_list, nrec, skip, seek.first.rec,  : 
+    reading FASTA file PkPfPmPoPv.fasta: ">" expected at beginning of line 1
+  Calls: <Anonymous> -> .read_XStringSet -> fasta.index -> .Call2
+  Execution halted
+
+Work dir:
+  /home/yisihak/madhatter_lshtm_server_clone/work/07/b81f1cdbdbf4ceab71a084d2025c9a
+
+Container:
+  eppicenter/mad4hatter:sha-110d09e
+
+Tip: you can replicate the issue by changing to the process work dir and entering the command `bash .command.run`
+ExitStatus	1
+HomeDir	/home/yisihak
+LaunchDir	/home/yisihak/madhatter_lshtm_server_clone
+Manifest	nextflow.config.Manifest@2ed65efc
+Profile	docker
+ProjectDir	/home/yisihak/madhatter_lshtm_server_clone
+Repository	null
+Resume	false
+Revision	null
+RunName	lethal_kilby
+ScriptFile	/home/yisihak/madhatter_lshtm_server_clone/main.nf
+ScriptId	943f264eaf1fff2f194fce608d409200
+ScriptName	main.nf
+SessionId	bdc645eb-86df-4a41-bbe0-bbc14241c805
+Start	2026-08-18T05:16:18.472634980-07:00
+StubRun	false
+Success	false
+UserName	yisihak
+WorkDir	/home/yisihak/madhatter_lshtm_server_clone/work
+NextflowBuild	11173
+NextflowTimestamp	10-02-2026 15:17 UTC
+NextflowVersion	25.10.4
+PipelineVersion	v0.2.1
+ContainerEngine	docker
+Duration	36m 9s
+CommandLine	nextflow run main.nf --readDIR ../TES_fastq/run5/ --outDIR ./TES_run5_output --target v4 -profile docker --sequencer nextseq -config conf/custom.config
+CommitId	null
+Complete	2026-08-18T05:57:43.864072554-07:00
+ConfigFiles	/home/yisihak/madhatter_lshtm_server_clone/nextflow.config, /home/yisihak/madhatter_lshtm_server_clone/conf/custom.config
+Container	eppicenter/mad4hatter:sha-110d09e
+ErrorMessage	null
+ErrorReport	null
+ExitStatus	0
+HomeDir	/home/yisihak
+LaunchDir	/home/yisihak/madhatter_lshtm_server_clone
+Manifest	nextflow.config.Manifest@712c9bcf
+Profile	docker
+ProjectDir	/home/yisihak/madhatter_lshtm_server_clone
+Repository	null
+Resume	false
+Revision	null
+RunName	peaceful_fermi
+ScriptFile	/home/yisihak/madhatter_lshtm_server_clone/main.nf
+ScriptId	943f264eaf1fff2f194fce608d409200
+ScriptName	main.nf
+SessionId	bf95f954-25d9-48ed-8fb7-5cf90532d804
+Start	2026-08-18T05:21:35.317176661-07:00
+StubRun	false
+Success	true
+UserName	yisihak
+WorkDir	/home/yisihak/madhatter_lshtm_server_clone/work
+NextflowBuild	11173
+NextflowTimestamp	10-02-2026 15:17 UTC
+NextflowVersion	25.10.4

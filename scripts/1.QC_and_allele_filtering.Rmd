@@ -1,0 +1,1882 @@
+---
+title: "Amplicon Sequence Run QC"
+author: "William and Yisihak"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(ggplot2)
+  library(tidyr)
+  library(tidyverse)
+  library(stringr)
+  library(purrr)
+  library(data.table)
+  library(vctrs)
+  library(plotly)
+  library(readxl)
+  library(scales)
+  library(htmltools)
+})
+
+options(stringsAsFactors = FALSE)
+
+```
+
+# import allele data and set configurations
+
+Each run directory should contain `allele_data.txt`.
+
+```{r configuration}
+# One directory per sequence run.
+# The directory name is used as the default RunID.
+
+run_dirs <- c(
+  "../data/QC/Input/run4",
+  "../data/QC/Input/run5",
+  "../data/QC/Input/run9"
+)
+
+# Optional: explicitly give RunIDs in the same order as run_dirs.
+# Leave as NULL to use the directory names.
+run_ids <- NULL
+
+# Shared pool metadata files.
+pool_1A_file <- "../data/QC/Input/mad4hatter_pool_info/Pool1A-Diversity.tsv"
+pool_1B_file <- "../data/QC/Input/mad4hatter_pool_info/Pool1B-Resitance+.tsv"
+pool_2_file  <- "../data/QC/Input/mad4hatter_pool_info/Pool2-Resistance+.tsv"
+
+# Output directory. A separate subdirectory is created for every run.
+output_dir <- "../data/QC/Results"
+
+# Set TRUE if Allele should be generated from PseudoCIGAR.
+# Set FALSE if the input already contains the desired Allele column.
+assign_allele_from_pseudocigar <- FALSE
+
+# QC thresholds retained from the original script.
+TOTAL_READS_LOCI <- 248
+TOTAL_READS_PER_LOCI <- 50
+LOCUS_COVERAGE_FRACTION <- 0.70
+N100_CUTOFF <- 0.50
+LOW_READ_LOCUS_CUTOFF <- 10
+LOW_READ_LOCUS_POPULATION_FRACTION <- 1/3
+```
+
+# Helper functions
+
+The following helpers are used throughout the QC. They provide **empty-data protection**, so an empty run/control/filter does not cause the whole report to fail.
+
+```{r helpers}
+is_empty_df <- function(x) {
+  is.null(x) || !is.data.frame(x) || nrow(x) == 0
+}
+
+safe_n_distinct <- function(x) {
+  if (length(x) == 0) 0L else dplyr::n_distinct(x)
+}
+
+safe_mean <- function(x, digits = 2) {
+  if (length(x) == 0 || all(is.na(x))) return(NA_real_)
+  round(mean(x, na.rm = TRUE), digits)
+}
+
+safe_min <- function(x) {
+  if (length(x) == 0 || all(is.na(x))) return(NA_real_)
+  min(x, na.rm = TRUE)
+}
+
+safe_max <- function(x) {
+  if (length(x) == 0 || all(is.na(x))) return(NA_real_)
+}
+
+safe_plot <- function(plot_obj, empty_title = "No data available") {
+  if (inherits(plot_obj, "ggplot")) return(plot_obj)
+  ggplot() +
+    theme_void() +
+    ggtitle(empty_title)
+}
+
+safe_ggplotly <- function(plot_obj, empty_title = "No data available") {
+  if (inherits(plot_obj, "ggplot")) {
+    return(ggplotly(plot_obj))
+  }
+  ggplotly(
+    ggplot() +
+      theme_void() +
+      ggtitle(empty_title)
+  )
+}
+
+read_tsv_safe <- function(path, ...) {
+  if (!file.exists(path)) {
+    stop("File not found: ", path)
+  }
+  readr::read_tsv(path, trim_ws = TRUE, show_col_types = FALSE, ...)
+}
+
+make_empty_redo <- function() {
+  data.frame(
+    SampleID = character(),
+    StudySubject = character(),
+    Reason = character(),
+    stringsAsFactors = FALSE
+  )
+}
+
+make_redo_table <- function(ids, reason) {
+  ids <- unique(ids)
+  if (length(ids) == 0) return(make_empty_redo())
+
+  data.frame(
+    SampleID = ids,
+    StudySubject = stringr::word(ids, 1, sep = "_"),
+    Reason = reason,
+    stringsAsFactors = FALSE
+  )
+}
+
+safe_write_csv <- function(x, path) {
+  if (is.null(x) || !is.data.frame(x)) x <- data.frame()
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  write.csv(x, path, row.names = FALSE)
+}
+
+run_name_from_path <- function(path) {
+  nm <- basename(normalizePath(path, winslash = "/", mustWork = FALSE))
+  if (is.na(nm) || nm == "") basename(dirname(path)) else nm
+}
+
+# Return a ggplot object only when the input contains data.
+empty_plot <- function(title) {
+  ggplot() +
+    theme_void() +
+    ggtitle(title)
+}
+```
+
+# Load shared pool metadata
+
+```{r load-pool-metadata}
+pool_1A <- read_tsv_safe(pool_1A_file) %>%
+  rename(Locus = `locus-pool`)
+
+pool_1B <- read_tsv_safe(pool_1B_file) %>%
+  rename(Locus = `locus-pool`)
+
+pool_2 <- read_tsv_safe(pool_2_file) %>%
+  rename(Locus = `locus-pool`)
+
+pool_1A_neg <- pool_1A %>% select(Locus, Category)
+pool_1B_neg <- pool_1B %>% select(Locus, `Reason to include (if drug resistance: aminoacids)`)
+pool_2_neg  <- pool_2 %>% select(Locus, `Reason to include (if drug resistance: aminoacids)`)
+
+pool_neg <- bind_rows(
+  pool_1A_neg,
+  pool_1B_neg,
+  pool_2_neg
+)
+
+pool_1Ax <- pool_1A %>% select(Locus, Category)
+pool_1Bx <- pool_1B %>% select(Locus, Category)
+pool_2x  <- pool_2 %>% select(Locus, Category)
+pool_cat <- bind_rows(pool_1Ax, pool_1Bx, pool_2x)
+
+pool_gene <- bind_rows(
+  pool_1B %>% select(Locus, Category, Gene),
+  pool_2 %>% select(Locus, Category, Gene)
+)
+```
+
+# Input validation and run loader
+
+```{r input-functions}
+validate_configuration <- function(run_dirs, run_ids = NULL) {
+  if (length(run_dirs) == 0) {
+    stop("No sequence-run directories were supplied.")
+  }
+
+  if (!is.null(run_ids) && length(run_ids) != length(run_dirs)) {
+    stop("run_ids must have the same length as run_dirs.")
+  }
+
+  missing_dirs <- run_dirs[!dir.exists(run_dirs)]
+  if (length(missing_dirs) > 0) {
+    stop(
+      "The following run directories do not exist:\n",
+      paste(missing_dirs, collapse = "\n")
+    )
+  }
+}
+
+load_allele_data <- function(run_dir, run_id, assign_allele = TRUE) {
+  allele_file <- file.path(run_dir, "allele_data.txt")
+
+  if (!file.exists(allele_file)) {
+    warning("Skipping run '", run_id, "': allele_data.txt was not found.")
+    return(NULL)
+  }
+
+  allele_data <- read.table(
+    allele_file,
+    sep = "\t",
+    header = TRUE,
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+
+  if (is_empty_df(allele_data)) {
+    warning("Run '", run_id, "' contains an empty allele_data.txt.")
+    return(NULL)
+  }
+
+  required_cols <- c("SampleID", "Locus", "Reads")
+  missing_cols <- setdiff(required_cols, names(allele_data))
+
+  if (length(missing_cols) > 0) {
+    stop(
+      "Run '", run_id, "' is missing required columns: ",
+      paste(missing_cols, collapse = ", ")
+    )
+  }
+
+  if (!"Allele" %in% names(allele_data)) {
+    if (!"PseudoCIGAR" %in% names(allele_data)) {
+      stop(
+        "Run '", run_id,
+        "' has neither Allele nor PseudoCIGAR. Cannot create Allele."
+      )
+    }
+    assign_allele <- TRUE
+  }
+
+  if (assign_allele) {
+    if (!"PseudoCIGAR" %in% names(allele_data)) {
+      stop(
+        "assign_allele_from_pseudocigar=TRUE but PseudoCIGAR is missing in run '",
+        run_id, "'."
+      )
+    }
+
+    cigar <- allele_data %>%
+      select(Locus, PseudoCIGAR) %>%
+      distinct() %>%
+      group_by(Locus) %>%
+      arrange(Locus, PseudoCIGAR, .by_group = TRUE) %>%
+      mutate(type = paste0("t", cur_group_id())) %>%
+      ungroup()
+
+    cigar$Allele <- paste(cigar$type, ave(cigar$type, cigar$type, FUN = seq_along), sep = ".")
+
+    allele_data <- allele_data %>%
+      left_join(cigar %>% select(Locus, PseudoCIGAR, Allele),
+                by = c("Locus", "PseudoCIGAR"))
+  }
+
+  allele_data <- allele_data %>%
+    distinct(SampleID, Locus, PseudoCIGAR, Allele, .keep_all = TRUE) %>%
+    group_by(SampleID, Locus) %>%
+    mutate(
+      norm.reads.locus = ifelse(sum(Reads, na.rm = TRUE) > 0,
+                                Reads / sum(Reads, na.rm = TRUE),
+                                0),
+      n.alleles = n()
+    ) %>%
+    arrange(SampleID, Locus) %>%
+    ungroup()
+
+  allele_data
+}
+```
+
+# QC functions
+
+## Preview data structure
+
+```{r preview-functions}
+preview_data <- function(data) {
+  if (is_empty_df(data)) {
+    return(list(
+      sample_size = 0,
+      Locus_no = 0,
+      allele_count = data.frame(),
+      clone_wide = data.frame()
+    ))
+  }
+
+  sample_size <- safe_n_distinct(data$SampleID)
+  Locus_no <- safe_n_distinct(data$Locus)
+
+  allele_count <- data %>%
+    group_by(Locus) %>%
+    summarize(n.alleles = n_distinct(Allele), .groups = "drop") %>%
+    arrange(desc(n.alleles))
+
+  clone <- data %>%
+    group_by(SampleID, Locus) %>%
+    summarise(total_alleles = n(), .groups = "drop") %>%
+    mutate(Clone = ifelse(total_alleles == 1, "Mono", "Poly")) %>%
+    group_by(SampleID) %>%
+    count(Clone) %>%
+    pivot_wider(names_from = Clone, values_from = n, values_fill = 0)
+
+  if (!"Mono" %in% names(clone)) clone$Mono <- 0
+  if (!"Poly" %in% names(clone)) clone$Poly <- 0
+
+  clone_wide <- clone %>%
+    mutate(
+      Total_alleles = Mono + Poly,
+      Mono_prop = ifelse(Total_alleles > 0, Mono / Total_alleles, 0),
+      Poly_prop = ifelse(Total_alleles > 0, Poly / Total_alleles, 0)
+    )
+
+  list(
+    sample_size = sample_size,
+    Locus_no = Locus_no,
+    allele_count = allele_count,
+    clone_wide = clone_wide
+  )
+}
+
+plot_total_alleles <- function(data) {
+  if (is_empty_df(data)) return(NULL)
+
+  allele_table <- data %>%
+    group_by(Locus) %>%
+    summarize(total_alleles = n_distinct(Allele), .groups = "drop") %>%
+    arrange(desc(total_alleles))
+
+  if (nrow(allele_table) == 0) return(NULL)
+
+  q95 <- quantile(allele_table$total_alleles, 0.95, na.rm = TRUE)
+
+  allele_table %>%
+    mutate(alleles_over_q95 = ifelse(total_alleles > q95, "Y", "N")) %>%
+    ggplot(aes(x = Locus, y = total_alleles, color = alleles_over_q95)) +
+    geom_point() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 0, size = 5)) +
+    scale_color_hue(direction = -1) +
+    ggtitle("Which loci are polyallelic?")
+}
+```
+
+## Negative controls
+
+```{r negative-controls-functions}
+negative_control_check <- function(data) {
+  if (is_empty_df(data)) {
+    return(list(
+      negatives = data.frame(),
+      bad_negatives = data.frame(),
+      loci_neg = data.frame(),
+      loci_neg_info = data.frame()
+    ))
+  }
+
+  negatives <- data %>%
+    filter(group == "NC") %>%
+    group_by(SampleID, Locus) %>%
+    summarize(Reads = sum(Reads, na.rm = TRUE), .groups = "drop")
+
+  bad_negatives <- negatives %>%
+    filter(Reads > 100) %>%
+    arrange(Reads)
+
+  loci_neg <- negatives %>%
+    group_by(Locus) %>%
+    summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+    mutate(pool = sapply(strsplit(Locus, "-"), tail, 1))
+
+  loci_neg_info <- loci_neg %>%
+    left_join(pool_neg, by = "Locus") %>%
+    filter(Reads >= 100) %>%
+    arrange(desc(Reads))
+
+  list(
+    negatives = negatives,
+    bad_negatives = bad_negatives,
+    loci_neg = loci_neg,
+    loci_neg_info = loci_neg_info
+  )
+}
+
+plot_negative_read_histogram <- function(negatives) {
+  if (is_empty_df(negatives)) return(NULL)
+
+  ggplot(negatives, aes(x = Reads)) +
+    geom_histogram() +
+    geom_vline(xintercept = 100, linetype = "dotted", col = "darkred") +
+    xlab("Number of Reads at Locus") +
+    ggtitle("How many total Reads do neg.ctrls have across each Locus?")
+}
+
+plot_negative_loci <- function(loci_neg) {
+  if (is_empty_df(loci_neg)) return(NULL)
+
+  ggplot(loci_neg, aes(y = Reads, x = Locus)) +
+    geom_bar(position = "dodge", stat = "identity") +
+    geom_hline(yintercept = 100, linetype = "dotted", col = "darkred") +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 3)) +
+    ggtitle("What is the total number of neg.ctrl Reads, by pool?") +
+    facet_wrap(~pool, scales = "free_x")
+}
+```
+
+## Positive controls
+
+```{r positive-control-functions}
+plot_pc_clones <- function(data) {
+  if (is_empty_df(data)) return(NULL)
+
+  data_pc <- data %>% filter(group == "PC")
+  if (is_empty_df(data_pc)) return(NULL)
+
+  pc_clone <- data_pc %>%
+    group_by(SampleID, Locus) %>%
+    summarise(total_alleles = n(), .groups = "drop") %>%
+    mutate(Clone = ifelse(total_alleles == 1, "Mono", "Poly")) %>%
+    group_by(SampleID) %>%
+    count(Clone)
+
+  if (is_empty_df(pc_clone)) return(NULL)
+
+  ggplot(pc_clone, aes(x = SampleID, y = n)) +
+    geom_col(aes(fill = Clone)) +
+    theme(
+      axis.text.y = element_text(size = 8),
+      axis.text.x = element_text(angle = 90, size = 7)
+    ) +
+    scale_y_continuous(name = "Locus No.", breaks = seq(0, 200, by = 50))
+}
+
+plot_pc_polyclonal_loci <- function(data) {
+  if (is_empty_df(data)) return(NULL)
+
+  positives <- data %>%
+    filter(group == "PC") %>%
+    group_by(SampleID, Locus) %>%
+    mutate(
+      read_fraction = ifelse(sum(Reads, na.rm = TRUE) > 0,
+                             100 * Reads / sum(Reads, na.rm = TRUE),
+                             0),
+      n.alleles = n()
+    ) %>%
+    filter(norm.reads.locus > 0.01) %>%
+    mutate(Clone = ifelse(n.alleles == 1, "Mono", "Poly")) %>%
+    ungroup()
+
+  pc_poly_allele <- positives %>% filter(n.alleles > 1)
+  if (is_empty_df(pc_poly_allele)) return(NULL)
+
+  ggplot(pc_poly_allele) +
+    geom_point(aes(x = read_fraction, y = log10(Reads), color = Locus)) +
+    geom_hline(yintercept = 2, color = "black", linetype = "dashed")
+}
+
+pc_consistency <- function(data) {
+  if (is_empty_df(data)) return(data.frame())
+
+  allele_pc <- data %>%
+    filter(group == "PC") %>%
+    group_by(SampleID, Locus, Allele, Reads) %>%
+    summarise(.groups = "drop") %>%
+    group_by(Locus, Allele) %>%
+    mutate(duplicated = n() > 1) %>%
+    ungroup()
+
+  if (is_empty_df(allele_pc)) return(data.frame())
+
+  allele_pc %>%
+    group_by(SampleID) %>%
+    summarize(
+      pc_dup_prop = mean(duplicated == TRUE),
+      .groups = "drop"
+    )
+}
+
+plot_pc_clones_filt <- function(data) {
+  if (is_empty_df(data)) return(NULL)
+
+  data_pc_filt <- data %>%
+    filter(group == "PC", Reads > 10) %>%
+    group_by(SampleID, Locus) %>%
+    mutate(
+      read_fraction = ifelse(sum(Reads, na.rm = TRUE) > 0,
+                             Reads / sum(Reads, na.rm = TRUE),
+                             0)
+    ) %>%
+    filter(read_fraction > 0.01) %>%
+    mutate(
+      n.alleles = n(),
+      Clone = ifelse(n.alleles == 1, "Mono", "Poly")
+    ) %>%
+    ungroup()
+
+  if (is_empty_df(data_pc_filt)) return(NULL)
+
+  pc_clone <- data_pc_filt %>%
+    group_by(SampleID) %>%
+    count(Clone)
+
+  ggplot(pc_clone, aes(x = SampleID, y = n)) +
+    geom_col(aes(fill = Clone)) +
+    theme(
+      axis.text.y = element_text(size = 8),
+      axis.text.x = element_text(angle = 90, size = 7)
+    ) +
+    scale_y_continuous(name = "Locus No.", breaks = seq(0, 200, by = 50))
+}
+
+plot_pc_polyclonal_loci_filt <- function(data) {
+  if (is_empty_df(data)) return(NULL)
+
+  data_pc_filt <- data %>%
+    filter(group == "PC", Reads > 10) %>%
+    group_by(SampleID, Locus) %>%
+    mutate(read_fraction = ifelse(sum(Reads, na.rm = TRUE) > 0,
+                                   Reads / sum(Reads, na.rm = TRUE), 0)) %>%
+    filter(read_fraction > 0.01) %>%
+    mutate(
+      n.alleles = n(),
+      Clone = ifelse(n.alleles == 1, "Mono", "Poly")
+    ) %>%
+    ungroup()
+
+  pc_poly_allele <- data_pc_filt %>% filter(n.alleles > 1)
+  if (is_empty_df(pc_poly_allele)) return(NULL)
+
+  ggplot(pc_poly_allele) +
+    geom_point(aes(x = read_fraction, y = log10(Reads), color = Locus))
+}
+```
+
+# Step 1 — Total reads
+
+```{r total-read-functions}
+plot_Reads_dist <- function(data) {
+  if (is_empty_df(data)) return(NULL)
+
+  Reads_table <- data %>%
+    distinct(SampleID, Locus, Allele, .keep_all = TRUE) %>%
+    group_by(SampleID) %>%
+    summarize(Total_Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+    arrange(Total_Reads)
+
+  if (nrow(Reads_table) == 0) return(NULL)
+
+  Reads_table <- Reads_table %>%
+    mutate(label = case_when(
+      grepl("NC", SampleID) ~ "NC",
+      grepl("NTC", SampleID) ~ "NC",
+      grepl("3D7", SampleID) ~ "PC",
+      grepl("Dd2", SampleID) ~ "PC",
+      grepl("DD2", SampleID) ~ "PC",
+      grepl("HB3", SampleID) ~ "PC",
+      grepl("K1", SampleID) ~ "PC",
+      grepl("UCSF", SampleID) ~ "PC",
+      grepl("PC", SampleID) ~ "PC",
+      TRUE ~ "Sample"
+    ))
+
+  ggplot(Reads_table, aes(x = log10(Total_Reads + 1), fill = label)) +
+    geom_density(alpha = .5) +
+    ggtitle("Total Reads distribution")
+}
+
+plot_Reads_cutoff <- function(data, loci = 248, Reads_cutoff = 50) {
+  if (is_empty_df(data)) return(NULL)
+
+  Reads_table <- data %>%
+    distinct(SampleID, Locus, Allele, .keep_all = TRUE) %>%
+    group_by(SampleID) %>%
+    summarize(Total_Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+    arrange(Total_Reads)
+
+  if (nrow(Reads_table) == 0) return(NULL)
+
+  pc <- unique(data$SampleID[data$group == "PC"])
+  nc <- unique(data$SampleID[data$group == "NC"])
+  controls <- unique(c(pc, nc))
+
+  Reads_criterion <- loci * Reads_cutoff
+
+  sample_low_Reads <- Reads_table %>%
+    filter(!SampleID %in% controls, Total_Reads < Reads_criterion) %>%
+    pull(SampleID)
+
+  Reads_table <- Reads_table %>%
+    mutate(
+      QC = case_when(
+        SampleID %in% pc ~ "Positive controls",
+        SampleID %in% nc ~ "Negative controls",
+        SampleID %in% sample_low_Reads ~ "Low-Reads samples",
+        TRUE ~ "QC-passed samples"
+      )
+    )
+
+  level_order <- Reads_table %>%
+    arrange(factor(QC, levels = c(
+      "Negative controls",
+      "Low-Reads samples",
+      "Positive controls",
+      "QC-passed samples"
+    ))) %>%
+    pull(SampleID)
+
+  color_fill <- c(
+    "Positive controls" = "red",
+    "Negative controls" = "green",
+    "Low-Reads samples" = "gray",
+    "QC-passed samples" = "black"
+  )
+
+  ggplot(
+    Reads_table,
+    aes(x = factor(SampleID, levels = level_order),
+        y = log10(Total_Reads + 1),
+        fill = QC)
+  ) +
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    scale_fill_manual(values = color_fill) +
+    theme_classic() +
+    theme(axis.text.y = element_blank()) +
+    geom_hline(
+      yintercept = log10(Reads_criterion + 1),
+      linetype = "dashed",
+      color = "red"
+    ) +
+    ylab("Log10 Total Reads") +
+    xlab("SampleID") +
+    ggtitle("Filter out samples with <50*248 reads")
+}
+
+remove_low_Reads_samples <- function(data, loci = 248, Reads_cutoff = 50) {
+  if (is_empty_df(data)) {
+    return(list(
+      clean_data = data,
+      clean_data_info = "Step 1 - No input data.",
+      removed_SampleID = character()
+    ))
+  }
+
+  Reads_table <- data %>%
+    distinct(SampleID, Locus, Allele, .keep_all = TRUE) %>%
+    group_by(SampleID) %>%
+    summarize(Total_Reads = sum(Reads, na.rm = TRUE), .groups = "drop")
+
+  pc <- unique(data$SampleID[data$group == "PC"])
+  nc <- unique(data$SampleID[data$group == "NC"])
+  controls <- unique(c(pc, nc))
+
+  Reads_criterion <- loci * Reads_cutoff
+
+  sample_low_Reads <- Reads_table %>%
+    filter(!SampleID %in% controls, Total_Reads < Reads_criterion) %>%
+    pull(SampleID)
+
+  clean_data <- data %>%
+    filter(!SampleID %in% unique(c(controls, sample_low_Reads)))
+
+  original_n <- safe_n_distinct(data$SampleID)
+  final_n <- safe_n_distinct(clean_data$SampleID)
+
+  list(
+    clean_data = clean_data,
+    clean_data_info = sprintf(
+      "Step 1 - Sample size after removing samples with insufficient reads = %s, Retained prop. = %s",
+      final_n,
+      ifelse(original_n > 0, round(final_n / original_n, 2), NA)
+    ),
+    removed_SampleID = sample_low_Reads
+  )
+}
+```
+
+# Step 2 — Loci coverage
+
+```{r loci-functions}
+plot_loci_dist <- function(data) {
+
+  if (is_empty_df(data)) {
+    return(NULL)
+  }
+
+  # Count the number of loci represented for each sample
+  loci_by_sample <- data %>%
+    group_by(SampleID, Locus) %>%
+    summarise(
+      total_loci = n(),
+      .groups = "drop"
+    ) %>%
+    group_by(SampleID) %>%
+    summarise(
+      Total_loci = n_distinct(Locus),
+      .groups = "drop"
+    )
+
+  if (is_empty_df(loci_by_sample)) {
+    return(NULL)
+  }
+
+  ggplot(loci_by_sample, aes(x = Total_loci)) +
+    geom_histogram() +
+    scale_x_continuous(breaks = seq(0, 300, 25)) +
+    xlab("Total loci") +
+    ggtitle("Loci distribution")
+}
+
+
+plot_loci_cutoff <- function(
+    data,
+    loci = 248,
+    perc_covered = 0.7
+) {
+
+  if (is_empty_df(data)) {
+    return(NULL)
+  }
+
+  # Count unique loci represented in each sample
+  loci_by_sample <- data %>%
+    group_by(SampleID) %>%
+    summarise(
+      Total_loci = n_distinct(Locus),
+      .groups = "drop"
+    )
+
+  if (is_empty_df(loci_by_sample)) {
+    return(NULL)
+  }
+
+  # Calculate cutoff
+  loci_criterion <- round(loci * perc_covered)
+
+  # Classify samples
+  loci_by_sample <- loci_by_sample %>%
+    mutate(
+      QC = ifelse(
+        Total_loci < loci_criterion,
+        "Below cutoff",
+        "QC-passed"
+      )
+    ) %>%
+    arrange(Total_loci)
+
+  ggplot(
+    loci_by_sample,
+    aes(
+      x = reorder(SampleID, Total_loci),
+      y = Total_loci
+    )
+  ) +
+    geom_col(aes(fill = QC)) +
+    coord_flip() +
+    scale_y_continuous(
+      name = "No. of Locus",
+      breaks = seq(0, 300, by = 50)
+    ) +
+    geom_hline(
+      yintercept = loci_criterion,
+      linetype = "dotted",
+      color = "black"
+    ) +
+    xlab("SampleID") +
+    ggtitle("Filter out samples with insufficient loci coverage")
+}
+
+remove_low_loci_samples <- function(data, loci = 248, perc_covered = 0.7) {
+  if (is_empty_df(data)) {
+    return(list(
+      clean_data = data,
+      clean_data_info = "Step 2 - No input data.",
+      removed_SampleID = character()
+    ))
+  }
+
+  clone <- data %>%
+    group_by(SampleID, Locus) %>%
+    summarise(total_loci = n(), .groups = "drop") %>%
+    mutate(Clone = ifelse(total_loci == 1, "Mono", "Poly")) %>%
+    group_by(SampleID) %>%
+    count(Clone)
+
+  loci_criterion <- round(loci * perc_covered)
+
+  sample_less_loci <- clone %>%
+    group_by(SampleID) %>%
+    summarise(total_loci = sum(n), .groups = "drop") %>%
+    filter(total_loci < loci_criterion) %>%
+    pull(SampleID)
+
+  clean_data <- data %>%
+    filter(!SampleID %in% sample_less_loci)
+
+  original_n <- safe_n_distinct(data$SampleID)
+  final_n <- safe_n_distinct(clean_data$SampleID)
+
+  list(
+    clean_data = clean_data,
+    clean_data_info = sprintf(
+      "Step 2 - Sample size after removing samples with insufficient loci coverage = %s, Retained prop. = %s",
+      final_n,
+      ifelse(original_n > 0, round(final_n / original_n, 2), NA)
+    ),
+    removed_SampleID = sample_less_loci
+  )
+}
+```
+
+# Step 3 — Proportion of loci with >100 Reads
+
+```{r n100-functions}
+plot_n100_loci_cutoff <- function(data, n100_cutoff = 0.5) {
+  if (is_empty_df(data)) return(NULL)
+
+  Locus_cov_100 <- data %>%
+    group_by(SampleID, Locus, Category, Pool) %>%
+    summarize(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+    group_by(SampleID, Category, Pool) %>%
+    summarize(
+      total_Reads = sum(Reads, na.rm = TRUE),
+      n100 = sum(Reads >= 100),
+      .groups = "drop"
+    )
+
+  amp_cov_category_norm <- Locus_cov_100 %>%
+    filter(Category != "Species") %>%
+    mutate(norm_100 = case_when(
+      Category == "Diversity" ~ n100 / 165,
+      Category == "Resistance" ~ n100 / 38,
+      Category == "Immune" ~ n100 / 5,
+      Category == "Diagnostic" ~ n100 / 30,
+      TRUE ~ NA_real_
+    )) %>%
+    filter(!is.na(norm_100))
+
+  if (is_empty_df(amp_cov_category_norm)) return(NULL)
+
+  ggplot(amp_cov_category_norm, aes(x = total_Reads, y = norm_100)) +
+    geom_point(aes(color = "red", alpha = 0.5)) +
+    scale_x_log10() +
+    geom_hline(yintercept = n100_cutoff, linetype = "dashed", color = "black") +
+    facet_wrap(~Category) +
+    ggtitle("Normalized prop. of loci with > 100 Reads in each sample") +
+    ylim(0, 1) +
+    ylab("Proportion of loci with >100 Reads") +
+    xlab("Total Reads")
+}
+
+plot_n100_sample_cutoff <- function(data, n100_cutoff = 0.5) {
+  if (is_empty_df(data)) return(NULL)
+
+  Locus_cov_100 <- data %>%
+    group_by(SampleID, Locus, Category, Pool) %>%
+    summarize(Reads = sum(Reads, na.rm = TRUE), .groups = "drop")
+
+  n_table <- Locus_cov_100 %>%
+    filter(Category == "Diversity") %>%
+    group_by(SampleID, Locus) %>%
+    summarize(total_Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+    mutate(n100 = ifelse(total_Reads >= 100, 1, 0))
+
+  n_count <- n_table %>%
+    group_by(SampleID) %>%
+    summarise(
+      n100_0_count = sum(n100 == 0),
+      n100_1_count = sum(n100 == 1),
+      n100_proportion = n100_1_count / n(),
+      .groups = "drop"
+    )
+
+  if (is_empty_df(n_count)) return(NULL)
+
+  results <- tibble(
+    X = 0:100,
+    SampleCount = map_int(
+      0:100,
+      ~ sum(n_count$n100_proportion >= (.x / 100), na.rm = TRUE)
+    )
+  )
+
+  ggplot(results, aes(x = SampleCount, y = X)) +
+    geom_line() +
+    geom_hline(
+      yintercept = n100_cutoff * 100,
+      linetype = "dashed",
+      color = "black",
+      alpha = .5
+    ) +
+    labs(
+      y = "Proportion of loci over 100 Reads",
+      x = "Sample count"
+    ) +
+    scale_x_continuous(breaks = seq(0, 1250, 100))
+}
+
+remove_n100_cutoff <- function(data, n100_cutoff = 0.5) {
+  if (is_empty_df(data)) {
+    return(list(
+      clean_data = data,
+      clean_data_info = "Step 3 - No input data.",
+      removed_SampleID = character()
+    ))
+  }
+
+  Locus_cov_100 <- data %>%
+    group_by(SampleID, Locus, Category, Pool) %>%
+    summarize(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+    group_by(SampleID, Category, Pool) %>%
+    summarize(
+      total_Reads = sum(Reads, na.rm = TRUE),
+      n100 = sum(Reads >= 100),
+      .groups = "drop"
+    )
+
+  amp_cov_category_norm <- Locus_cov_100 %>%
+    filter(Category != "Species") %>%
+    mutate(norm_100 = case_when(
+      Category == "Diversity" ~ n100 / 165,
+      Category == "Resistance" ~ n100 / 38,
+      Category == "Immune" ~ n100 / 5,
+      Category == "Diagnostic" ~ n100 / 30,
+      TRUE ~ NA_real_
+    )) %>%
+    filter(!is.na(norm_100))
+
+  sample_n100_fail <- amp_cov_category_norm %>%
+    filter(Category == "Diversity", norm_100 < n100_cutoff) %>%
+    pull(SampleID) %>%
+    unique()
+
+  clean_data <- data %>%
+    filter(!SampleID %in% sample_n100_fail)
+
+  original_n <- safe_n_distinct(data$SampleID)
+  final_n <- safe_n_distinct(clean_data$SampleID)
+
+  list(
+    clean_data = clean_data,
+    clean_data_info = sprintf(
+      "Step 3 - Sample size after removing samples with less than n100 cutoff = %s, Retained prop. = %s",
+      final_n,
+      ifelse(original_n > 0, round(final_n / original_n, 2), NA)
+    ),
+    removed_SampleID = sample_n100_fail
+  )
+}
+```
+
+# Locus performance check
+
+```{r locus-performance}
+locus_performance_check <- function(data) {
+  if (is_empty_df(data)) {
+    return(list(
+      target_low_Reads = data.frame(),
+      gene_low_Reads = data.frame(),
+      gene_low_Reads_freq = data.frame(),
+      gene_low_Reads_popcut = data.frame()
+    ))
+  }
+
+  Locus_check <- data %>%
+    group_by(SampleID, Locus) %>%
+    summarize(total_Reads = sum(Reads, na.rm = TRUE), .groups = "drop")
+
+  target_low_Reads <- Locus_check %>%
+    filter(total_Reads <= LOW_READ_LOCUS_CUTOFF)
+
+  gene_low_Reads <- target_low_Reads %>%
+    left_join(pool_gene, by = "Locus")
+
+  gene_low_Reads_freq <- gene_low_Reads %>%
+    count(Locus, name = "count") %>%
+    mutate(
+      freq = count / safe_n_distinct(data$SampleID)
+    )
+
+  gene_low_Reads_popcut <- gene_low_Reads_freq %>%
+    filter(freq > LOW_READ_LOCUS_POPULATION_FRACTION)
+
+  list(
+    target_low_Reads = target_low_Reads,
+    gene_low_Reads = gene_low_Reads,
+    gene_low_Reads_freq = gene_low_Reads_freq,
+    gene_low_Reads_popcut = gene_low_Reads_popcut
+  )
+}
+```
+
+# Per-run QC pipeline
+
+```{r run-qc-function}
+process_run <- function(run_dir, run_id) {
+
+  message("================================================")
+  message("Processing run: ", run_id)
+  message("================================================")
+
+  raw <- load_allele_data(
+    run_dir = run_dir,
+    run_id = run_id,
+    assign_allele = assign_allele_from_pseudocigar
+  )
+
+  if (is.null(raw) || is_empty_df(raw)) {
+    return(list(
+      RunID = run_id,
+      RunDir = run_dir,
+      status = "EMPTY_OR_MISSING",
+      data = data.frame()
+    ))
+  }
+
+  # Merge/control classification retained from original script.
+  data <- raw %>%
+    mutate(
+      group = case_when(
+      grepl("NC", SampleID) ~ "NC",
+      grepl("NTC", SampleID) ~ "NC",
+      grepl("3D7", SampleID) ~ "PC",
+      grepl("Dd2", SampleID) ~ "PC",
+      grepl("DD2", SampleID) ~ "PC",
+      grepl("HB3", SampleID) ~ "PC",
+      grepl("K1", SampleID) ~ "PC",
+      grepl("UCSF", SampleID) ~ "PC",
+      grepl("PC", SampleID) ~ "PC",
+        TRUE ~ "Sample"
+      )
+    )
+
+  # Preview.
+  preview <- preview_data(data)
+
+  # -----------------------------
+  # Control checks
+  # -----------------------------
+  neg <- negative_control_check(data)
+  pc_consistency_table <- pc_consistency(data)
+
+  # -----------------------------
+  # Step 1: total reads
+  # -----------------------------
+  step1 <- remove_low_Reads_samples(
+    data,
+    loci = TOTAL_READS_LOCI,
+    Reads_cutoff = TOTAL_READS_PER_LOCI
+  )
+  filtered_data1 <- step1$clean_data
+
+  filtered_list1 <- make_redo_table(
+    step1$removed_SampleID,
+    "Few Total Reads"
+  )
+
+  # -----------------------------
+  # Step 2: loci coverage
+  # -----------------------------
+  step2 <- remove_low_loci_samples(
+    filtered_data1,
+    loci = TOTAL_READS_LOCI,
+    perc_covered = LOCUS_COVERAGE_FRACTION
+  )
+  filtered_data2 <- step2$clean_data
+
+  filtered_list2 <- make_redo_table(
+    step2$removed_SampleID,
+    "Insufficient locus coverage"
+  )
+
+  # Add pool/category metadata.
+  if (!is_empty_df(filtered_data2)) {
+    filtered_data2 <- filtered_data2 %>%
+      mutate(Pool = sapply(strsplit(Locus, "-"), tail, 1)) %>%
+      left_join(pool_cat, by = "Locus")
+  }
+
+  # -----------------------------
+  # Step 3: n100
+  # -----------------------------
+  step3 <- remove_n100_cutoff(
+    filtered_data2,
+    n100_cutoff = N100_CUTOFF
+  )
+  filtered_data3 <- step3$clean_data
+
+  filtered_list3 <- make_redo_table(
+    step3$removed_SampleID,
+    "Less than 50% loci covered"
+  )
+
+  # -----------------------------
+  # Locus performance
+  # -----------------------------
+  locus_check <- locus_performance_check(filtered_data3)
+
+  redos <- bind_rows(
+    filtered_list1,
+    filtered_list2,
+    filtered_list3
+  ) %>%
+    distinct()
+
+  list(
+    RunID = run_id,
+    RunDir = run_dir,
+    status = "OK",
+    data = data,
+    preview = preview,
+    negatives = neg,
+    pc_consistency = pc_consistency_table,
+    filtered_data1 = filtered_data1,
+    filtered_data2 = filtered_data2,
+    filtered_data3 = filtered_data3,
+    filtered_list1 = filtered_list1,
+    filtered_list2 = filtered_list2,
+    filtered_list3 = filtered_list3,
+    redos = redos,
+    locus_check = locus_check
+  )
+}
+```
+
+# Run all sequence runs
+
+```{r run-all}
+validate_configuration(run_dirs, run_ids)
+
+if (is.null(run_ids)) {
+  run_ids <- vapply(run_dirs, run_name_from_path, character(1))
+}
+
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+run_results <- map2(
+  run_dirs,
+  run_ids,
+  ~ process_run(.x, .y)
+)
+
+names(run_results) <- run_ids
+
+
+run_summary <- tibble(
+  RunID = run_ids,
+  RunDir = run_dirs,
+  Status = map_chr(run_results, function(x) {
+    x$status
+  }),
+  Samples = map_int(run_results, function(x) {
+    if (x$status == "OK") {
+      safe_n_distinct(x$data$SampleID)
+    } else {
+      0L
+    }
+  }),
+  Loci = map_int(run_results, function(x) {
+    if (x$status == "OK") {
+      safe_n_distinct(x$data$Locus)
+    } else {
+      0L
+    }
+  }),
+  Samples_Redo = map_int(run_results, function(x) {
+    if (x$status == "OK") {
+      nrow(x$redos)
+    } else {
+      0L
+    }
+  })
+)
+
+run_summary
+
+```
+
+# QC results — one section per sequence run
+
+```{r render-run-results, results='asis'}
+for (run_id in names(run_results)) {
+
+  r <- run_results[[run_id]]
+
+  cat("\n\n# Sequence run: ", run_id, "\n\n", sep = "")
+
+  if (r$status != "OK") {
+    cat(
+      "**Status:** ", r$status,
+      ". No QC calculations were performed because the run input was missing or empty.\n\n",
+      sep = ""
+    )
+    next
+  }
+
+  # -----------------------------
+  # Preview
+  # -----------------------------
+  cat("## Preview data structure\n\n")
+  cat(
+    sprintf(
+      "- Sample size = %s\n- All Locus = %s\n",
+      r$preview$sample_size,
+      r$preview$Locus_no
+    )
+  )
+
+  if (!is_empty_df(r$preview$allele_count)) {
+    cat(
+      sprintf(
+        "- Alleles per locus range = %s to %s\n",
+        safe_min(r$preview$allele_count$n.alleles),
+        safe_max(r$preview$allele_count$n.alleles)
+      )
+    )
+  } else {
+    cat("- Allele summary: no data\n")
+  }
+
+  if (!is_empty_df(r$preview$clone_wide)) {
+    cat(
+      sprintf(
+        "- Mean total loci = %s\n- Mean proportion monoclonal = %s\n- Mean proportion polyclonal = %s\n",
+        safe_mean(r$preview$clone_wide$Total_alleles),
+        safe_mean(r$preview$clone_wide$Mono_prop),
+        safe_mean(r$preview$clone_wide$Poly_prop)
+      )
+    )
+  }
+
+  cat("\n### Which loci are polyallelic?\n\n")
+  p <- plot_total_alleles(r$data)
+  if (is.null(p)) print(empty_plot("Which loci are polyallelic? — No data")) else print(ggplotly(p))
+
+  # -----------------------------
+  # Negative controls
+  # -----------------------------
+  cat("\n## Check negative controls\n\n")
+
+  p <- plot_negative_read_histogram(r$negatives$negatives)
+  if (is.null(p)) print(empty_plot("Negative controls — No negative controls found")) else print(p)
+
+  p <- plot_negative_loci(r$negatives$loci_neg)
+  if (is.null(p)) print(empty_plot("Negative controls by locus — No data")) else print(p)
+
+  cat("\n**Negative controls with >100 reads/allele:**\n\n")
+  print(r$negatives$bad_negatives)
+
+  cat("\n**Loci with >=100 reads summed over negative controls:**\n\n")
+  print(r$negatives$loci_neg_info)
+
+  # -----------------------------
+  # Positive controls
+  # -----------------------------
+  cat("\n## Check positive controls\n\n")
+
+  p <- plot_pc_clones(r$data)
+  if (is.null(p)) print(empty_plot("Positive control clonality — No positive controls found")) else print(ggplotly(p))
+
+  p <- plot_pc_polyclonal_loci(r$data)
+  if (is.null(p)) print(empty_plot("Positive control polyclonal loci — No data")) else print(ggplotly(p))
+
+  cat("\n### Positive-control consistency\n\n")
+  print(r$pc_consistency)
+
+  p <- plot_pc_clones_filt(r$data)
+  if (is.null(p)) print(empty_plot("Filtered positive-control clonality — No data")) else print(ggplotly(p))
+
+  p <- plot_pc_polyclonal_loci_filt(r$data)
+  if (is.null(p)) print(empty_plot("Filtered positive-control polyclonal loci — No data")) else print(ggplotly(p))
+
+  # -----------------------------
+  # Step 1
+  # -----------------------------
+  cat("\n## Step 1: Total Reads\n\n")
+  
+  if (is_empty_df(r$filtered_list1)) {
+    cat("No samples were removed at this step.\n\n")
+  } else {
+    print(r$filtered_list1)
+  }
+
+  p <- plot_Reads_dist(r$data)
+  if (is.null(p)) print(empty_plot("Total Reads distribution — No data")) else print(p)
+
+  p <- plot_Reads_cutoff(
+    r$data,
+    loci = TOTAL_READS_LOCI,
+    Reads_cutoff = TOTAL_READS_PER_LOCI
+  )
+  if (is.null(p)) print(empty_plot("Total Reads cutoff — No data")) else print(ggplotly(p))
+
+  # cat("\n", r$filtered_list1, "\n", sep = "")
+
+  # -----------------------------
+  # Step 2
+  # -----------------------------
+  cat("\n## Step 2: Loci coverage\n\n")
+  
+  if (is_empty_df(r$filtered_list2)) {
+    cat("No samples were removed at this step.\n\n")
+  } else {
+    print(r$filtered_list2)
+  }
+
+  p <- plot_loci_dist(r$filtered_data1)
+  if (is.null(p)) print(empty_plot("Loci distribution — No data")) else print(p)
+
+  p <- plot_loci_cutoff(
+    r$filtered_data1,
+    loci = TOTAL_READS_LOCI,
+    perc_covered = LOCUS_COVERAGE_FRACTION
+  )
+  if (is.null(p)) print(empty_plot("Loci coverage cutoff — No data")) else print(ggplotly(p))
+
+  # cat("\n", r$filtered_list2, "\n", sep = "")
+
+  # -----------------------------
+  # Step 3
+  # -----------------------------
+  cat("\n## Step 3: Proportion of loci > 100 Reads\n\n")
+  
+  if (is_empty_df(r$filtered_list3)) {
+    cat("No samples were removed at this step.\n\n")
+  } else {
+    print(r$filtered_list3)
+  }
+
+  p <- plot_n100_loci_cutoff(
+    r$filtered_data2,
+    n100_cutoff = N100_CUTOFF
+  )
+  if (is.null(p)) print(empty_plot("Normalized proportion of loci >100 Reads — No data")) else print(p)
+
+  p <- plot_n100_sample_cutoff(
+    r$filtered_data2,
+    n100_cutoff = N100_CUTOFF
+  )
+  if (is.null(p)) print(empty_plot("n100 proportion vs sample retention — No data")) else print(p)
+
+  # cat("\n", r$filtered_list3, "\n", sep = "")
+
+  # -----------------------------
+  # Locus performance
+  # -----------------------------
+  cat("\n## Locus performance check\n\n")
+
+  lp <- r$locus_check
+
+  cat(
+    sprintf(
+      "%s loci had <= %s Reads at least in one sample.\n",
+      safe_n_distinct(lp$gene_low_Reads$Locus),
+      LOW_READ_LOCUS_CUTOFF
+    )
+  )
+
+  cat(
+    sprintf(
+      "%s loci had <= %s Reads across more than 1/3 of total samples.\n",
+      nrow(lp$gene_low_Reads_popcut),
+      LOW_READ_LOCUS_CUTOFF
+    )
+  )
+
+  cat("\n**Which loci had <=10 Reads across 1/3 of total samples?**\n\n")
+  if (is_empty_df(lp$gene_low_Reads_popcut)) {
+    cat("None.\n")
+  } else {
+    print(lp$gene_low_Reads_popcut)
+  }
+
+  # -----------------------------
+  # Redos
+  # -----------------------------
+  cat("\n## Samples that need to be redone\n\n")
+  print(r$redos)
+}
+```
+
+# Export results
+
+Each run gets its **own output folder**, so results from different sequence runs cannot overwrite each other.
+
+```{r export-results}
+for (run_id in names(run_results)) {
+
+  r <- run_results[[run_id]]
+
+  run_output <- file.path(output_dir, make.names(run_id))
+  dir.create(run_output, recursive = TRUE, showWarnings = FALSE)
+
+  if (r$status != "OK") {
+    safe_write_csv(
+      data.frame(
+        RunID = run_id,
+        RunDir = r$RunDir,
+        Status = r$status
+      ),
+      file.path(run_output, "run_status.csv")
+    )
+    next
+  }
+
+  # Run summary.
+  safe_write_csv(
+    data.frame(
+      RunID = run_id,
+      Samples_input = safe_n_distinct(r$data$SampleID),
+      Loci_input = safe_n_distinct(r$data$Locus),
+      Samples_after_step1 = safe_n_distinct(r$filtered_data1$SampleID),
+      Samples_after_step2 = safe_n_distinct(r$filtered_data2$SampleID),
+      Samples_after_step3 = safe_n_distinct(r$filtered_data3$SampleID),
+      Samples_redo = safe_n_distinct(r$redos$SampleID)
+    ),
+    file.path(run_output, "run_summary.csv")
+  )
+
+  # Control results.
+  safe_write_csv(
+    r$negatives$bad_negatives,
+    file.path(run_output, "negative_controls_over_100_reads.csv")
+  )
+
+  safe_write_csv(
+    r$negatives$loci_neg_info,
+    file.path(run_output, "negative_control_loci_over_100_reads.csv")
+  )
+
+  safe_write_csv(
+    r$pc_consistency,
+    file.path(run_output, "positive_control_consistency.csv")
+  )
+
+  # Redo lists.
+  safe_write_csv(
+    r$redos,
+    file.path(run_output, "QC_failed_samples.csv")
+  )
+
+  # Filtered allele table.
+  safe_write_csv(
+    r$filtered_data3,
+    file.path(run_output, "TES_filtered_allele_data.csv")
+  )
+
+  # Locus performance.
+  safe_write_csv(
+    r$locus_check$gene_low_Reads_popcut,
+    file.path(run_output, "loci_low_reads_over_1_3_samples.csv")
+  )
+}
+
+# Combined overview across all runs.
+safe_write_csv(
+  run_summary,
+  file.path(output_dir, "all_runs_summary.csv")
+)
+
+run_summary
+```
+
+
+# Merge Allele Data for Re-sequenced Samples, Remove False Positive Alleles and Prepare an Input for Moire
+
+allele frequency visualization 
+
+```{r visualization-functions}
+#| label: visualization-functions
+
+plot_allele_distribution <- function(dat) {
+  n_alleles_per_locus_by_sample <- dat |>
+    dplyr::group_by(sample_id, locus) |>
+    dplyr::summarize(n_alleles = dplyr::n_distinct(allele)) |>
+    dplyr::ungroup()
+
+  ggplot(n_alleles_per_locus_by_sample, aes(x = sample_id, group = n_alleles, fill = as.factor(n_alleles))) +
+    geom_bar(position = "stack") +
+    theme(axis.text.x = element_text(angle = 90)) +
+    scale_x_discrete(limits = n_alleles_per_locus_by_sample |>
+      dplyr::group_by(sample_id) |>
+      dplyr::summarize(avg_n_alleles = mean(n_alleles)) |>
+      dplyr::arrange(avg_n_alleles) |>
+      dplyr::pull(sample_id)) +
+    xlab("Sample") +
+    ylab("Number of Alleles")
+}
+
+plot_allele_prev_metrics <- function(dat, use_plotly = TRUE) {
+  total_samples <- dat |>
+    dplyr::distinct(sample_id) |>
+    nrow()
+
+  allele_prev_metrics <- dat |>
+    dplyr::group_by(sample_id, locus) |>
+    dplyr::mutate(prop = reads / sum(reads)) |>
+    dplyr::ungroup() |>
+    dplyr::group_by(locus, allele) |>
+    dplyr::summarize(
+      within_host_avg_prop = mean(prop),
+      pop_prev = dplyr::n_distinct(sample_id) / total_samples,
+      n_samples = dplyr::n_distinct(sample_id)
+    )
+
+  g <- ggplot(
+      allele_prev_metrics, 
+      aes(x = pop_prev, y = within_host_avg_prop, color = locus)
+    ) +
+    geom_point() +
+    guides(color = "none") +
+    xlab("Population Prevalence") +
+    ylab("Within-Host Average Proportion") +
+    theme_minimal()
+  g
+}
+```
+
+
+# merge the filtered allele data from each run
+
+```{r import, echo = F, warning = F, message= F}
+# looking at the raw alelle data and identifing potential alleles and loci that could prove difficult when merging and filter those out 
+
+run4 <- read_csv("../data/QC/Results/run4/TES_filtered_allele_data.csv") %>%
+  filter(SampleID != "BA056-D0", Locus != "Pf3D7_03_v3-891553-891827-1A", PseudoCIGAR != "93C116G177C") %>%
+  filter(SampleID != "MM024-D28", Locus != "Pf3D7_14_v3-1166107-1166371-1A", PseudoCIGAR != "6A28+9N64+8N88+9N100+8N179A") %>%
+  select(-norm.reads.locus, -n.alleles, -Allele)
+
+
+run5 <- read_csv("../data/QC/Results/run5/TES_filtered_allele_data.csv") %>%
+  filter(Locus != "Pf3D7_13_v3-1465616-1465890-1A") %>%
+  select(-norm.reads.locus, -n.alleles, -Allele)
+
+
+run9 <- read_csv("../data/QC/Results/run9/TES_filtered_allele_data.csv") %>%
+  filter(Locus != "Pf3D7_13_v3-1465616-1465890-1A") %>%
+  select(-norm.reads.locus, -n.alleles, -Allele)
+
+
+data <- rbind(run4, run5, run9)
+
+
+# Remove suffix not part of the sample name
+data$SampleID <- sub("_S[0-9]+", "",data$SampleID)
+
+pseudo_cigar_to_alleles <- function(df) {
+  df %>% select(Locus, PseudoCIGAR, ASV) %>% 
+    distinct() %>% 
+    group_by(Locus) %>% 
+    mutate(Allele = seq(1, n())) %>% 
+    ungroup() %>% 
+    mutate(Allele = paste0(Locus, ".", Allele))
+}
+
+
+# generate allele from pseudocigar
+allele_sequence <- pseudo_cigar_to_alleles(data)
+
+
+data %<>% left_join(allele_sequence, by = c("PseudoCIGAR", "Locus", "ASV")) %>%
+  group_by(SampleID, Locus, Allele) %>%
+  mutate(Read = sum(Reads)) %>%
+  filter(Read > 5) %>%  # filter alleles with less than 5 reads
+  ungroup() %>%
+  select(-Reads) %>%
+  dplyr::rename(Reads = Read) %>%
+  distinct() %>%
+  filter(!grepl("3D7*", SampleID))
+
+
+# Check for duplicates
+any(duplicated(data)) # we good
+
+print("Pre-filtering")
+# Overall range of the data
+sample_size <- n_distinct(data$SampleID)
+print(sprintf("Sample size= %s", sample_size))
+
+Locus_no <- n_distinct(data$Locus)
+print(sprintf("All Locus = %s", Locus_no))
+
+
+(plot_allele_prev_metrics(data |> dplyr::rename(sample_id = SampleID, locus = Locus, allele = Allele, reads = Reads)) +
+    labs(title = "Pre-filtering"))
+
+
+# Use only diversity markers
+pools <- pool_1A
+
+data <- data %>%
+  left_join(pools, by = "Locus")
+
+data_div <- data %>%
+  filter(Category.x == "Diversity") %>% 
+  mutate(site = case_when(
+    grepl("AA", SampleID) ~ "Asayita",
+    grepl("AC", SampleID) ~ "Gambella",
+    grepl("BA", SampleID) ~ "Benshangul",
+    grepl("GM", SampleID) ~ "Gondar",
+    grepl("MM", SampleID) ~ "Mizan",
+    TRUE ~ "NA"
+  ))
+
+print("Post-filtering")
+print(sprintf("Sample size= %s", sample_size)) # 615 final
+Locus_no <- n_distinct(data_div$Locus)
+print(sprintf("All Locus = %s", Locus_no)) # 165 final
+
+
+# loci with many false positive alleles
+loci_to_remove <- read_csv("../data/QC/Results/loci_to_remove.csv")
+
+data_div %<>%
+  filter(!Locus %in% loci_to_remove$Locus)
+
+
+(plot_allele_prev_metrics(data_div |> dplyr::rename(sample_id = SampleID, locus = Locus, allele = Allele, reads = Reads)) +
+    labs(title = "Post-filtering"))
+
+
+
+
+```
+
+### Preview raw data
+
+What is the allele distribution for polyclonal loci?
+
+```{r preview, echo=FALSE, warning = FALSE, message= FALSE}
+
+data_new <- data_div %>% 
+  dplyr::rename(sample_id = SampleID)
+
+# Count number of alleles per Locus per sample
+allele_count <- data_new %>% 
+    group_by(sample_id, Locus) %>%
+  summarise(n.alleles = n()) %>%
+  group_by(Locus) %>% 
+  arrange(-n.alleles)
+# Allele range in each sample
+print(sprintf("%s to %s alleles per Locus per sample",
+              min(allele_count$n.alleles), max(allele_count$n.alleles)))
+
+n_allele <- data_new %>%
+  distinct(sample_id, Locus, Allele, .keep_all = TRUE) %>%
+  group_by(sample_id, Locus) %>%
+  reframe(n.alleles = n(), norm.reads.locus = Reads/sum(Reads))
+
+# allele stats
+allele_stats <- n_allele %>%
+  group_by(Locus) %>%
+  summarise(mean = mean(n.alleles), median = median(n.alleles),
+            min = min(n.alleles), max = max(n.alleles)) %>%
+  arrange(-max)
+print(head(allele_stats))
+
+# Define categories for number of alleles
+n_allele_poly <- n_allele %>%
+  filter(n.alleles >1) %>%
+  mutate(allele_category = case_when(
+    n.alleles == 2 ~ "2",
+    n.alleles == 3 ~ "3",
+    n.alleles %in% 4:5 ~ "4-5",
+    n.alleles %in% 6:8 ~ "6-8",
+    n.alleles > 8 ~ "9+"
+  ))
+# Calculate proportion of samples with each allele category per locus
+n_allele_plot <- n_allele_poly %>%
+  group_by(Locus, allele_category) %>%
+  summarise(count = n()) %>%
+  group_by(Locus) %>%
+  mutate(prop.allele = count / sum(count))
+
+# Reorder the allele_category factor levels
+n_allele_plot <- n_allele_plot %>%
+  mutate(allele_category = factor(allele_category, levels = c("2", "3", "4-5", "6-8", "9+")))
+
+# Set order to proportion of 2 alleles
+level_2allele <- n_allele_plot %>%
+    filter(allele_category == "2") %>%
+    arrange(-prop.allele) %>%
+    pull(Locus)
+n_allele_plot <- n_allele_plot %>%
+  mutate(Locus = factor(Locus, levels = level_2allele))
+
+# Plotting the stacked bar plot
+g1 <- ggplot(n_allele_plot, aes(x = factor(Locus, level = level_2allele), y = prop.allele, fill = allele_category)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Locus", y = "Proportion", fill = "Number of Alleles") +
+  theme_classic() +
+  theme(axis.text.x = element_blank()) 
+g1p <- ggplotly(g1)
+g1p
+
+
+```
+
+### Filter minor alleles by 1% prevalence
+
+How does the allele distribution change after filtering?
+
+```{r filter, echo=FALSE, warning = FALSE, message= FALSE}
+
+##### Population level filtering first ###########
+
+# Filter alleles with less than 1% of total reads at the population level
+filtered_alleles <- data_new %>%
+  group_by(sample_id, site, Locus, Allele) %>%
+  summarise(
+    total_reads = sum(Reads), # Total reads per allele across samples
+    locus_reads = sum(Reads, na.rm = TRUE) %>% first(), # Total reads in the locus per sample/site
+    .groups = "drop"
+  ) %>%
+  mutate(population_frequency = total_reads / locus_reads * 100) %>%
+  filter(population_frequency >= 2) %>%
+  select(sample_id, site, Locus, Allele)
+
+# Join back with the original dataframe to retain only filtered alleles
+filtered_data <- data_new %>%
+  inner_join(filtered_alleles, by = c("sample_id", "site", "Locus", "Allele"))
+
+###### Now do straight 1% host-level allele frequency ###########
+
+filtered_data %<>%
+  distinct(sample_id, Locus, Allele, .keep_all = TRUE) %>%
+  group_by(sample_id, Locus) %>%
+  mutate(norm.reads.locus = Reads/sum(Reads))
+
+ggplot(data = filtered_data, aes(x = norm.reads.locus, y = Reads)) +
+  geom_point(aes(color = site)) +
+  scale_y_log10() +
+  facet_wrap(~site) +
+  ggtitle("Allele read count vs. within-host frequency") +
+  geom_vline(xintercept = 0.01)
+
+
+# Filter by norm.reads.locus > 0.01
+filtered_allele_data <- filtered_data %>%
+  filter(norm.reads.locus > 0.02)
+  # filter(norm.reads.locus > 0.10 & Reads > 10) # apply another, if <10% AND read count > 10 (1 out of 10 reads)
+
+# Now how does it look now
+ggplot(data = filtered_allele_data, aes(x = norm.reads.locus, y = Reads)) +
+  geom_point(aes(color = site)) +
+  scale_y_log10() +
+  facet_wrap(~site) +
+  ggtitle("Allele read count vs. within-host frequency")
+
+filtered <- filtered_allele_data %>%
+  group_by(sample_id) %>%
+  summarise(total = sum(Reads))
+
+# write_csv(filtered_allele_data, "TES_final_allele_data.csv")
+
+sample_size <- n_distinct(filtered_allele_data$sample_id)
+print(sprintf("Sample size= %s", sample_size))
+
+# new allele stats
+allele_count_filt <- filtered_allele_data %>%
+  group_by(sample_id, Locus) %>%
+  mutate(n.alleles = n())
+
+# Allele range in each sample
+print(sprintf("%s to %s alleles per Locus per sample",
+              min(allele_count_filt$n.alleles), max(allele_count_filt$n.alleles)))
+
+# new allele stats
+allele_stats_filt <- filtered_allele_data %>%
+  group_by(sample_id, Locus) %>%
+  mutate(n.alleles = n()) %>%
+  group_by(Locus) %>%
+  summarize(mean = mean(n.alleles), median = median(n.alleles),
+            min = min(n.alleles), max = max(n.alleles)) %>%
+  arrange(-max)
+print(head(allele_stats_filt))
+
+# Define categories for number of alleles
+allele_filt_poly <- allele_count_filt %>%
+  filter(n.alleles >1) %>%
+  mutate(allele_category = case_when(
+    n.alleles == 2 ~ "2",
+    n.alleles == 3 ~ "3",
+    n.alleles %in% 4:5 ~ "4-5",
+    n.alleles %in% 6:8 ~ "6-8",
+    n.alleles > 8 ~ "9+")) %>%
+  group_by(Locus, allele_category) %>%
+  summarize(count = n()) %>%
+  group_by(Locus) %>%
+  mutate(prop.allele = count / sum(count))
+# Reorder the allele_category factor levels
+allele_filt_poly <- allele_filt_poly %>%
+  mutate(allele_category = factor(allele_category, levels = c("2", "3", "4-5", "6-8", "9+")))
+# Set order to proportion of 2 alleles
+level_2allele <- allele_filt_poly %>%
+    filter(allele_category == "2") %>%
+    arrange(-prop.allele) %>%
+    pull(Locus)
+allele_filt_poly <- allele_filt_poly %>%
+  mutate(Locus = factor(Locus, levels = level_2allele))
+# Plotting the stacked bar plot
+g2 <- ggplot(allele_filt_poly, aes(x = factor(Locus, level = level_2allele), y = prop.allele, fill = allele_category)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Locus", y = "Proportion", fill = "Number of Alleles") +
+  theme_classic() +
+  theme(axis.text.x = element_blank()) 
+g2p <- ggplotly(g2)
+g2p
+
+
+```
+
+Looks like no loci have 9+ alleles after filtering. The max number of alleles is now 8. What are the loci with 6-8 alleles?
+
+```{r investigate, echo=FALSE, warning = FALSE, message= FALSE}
+
+loci_lot.al <- allele_filt_poly %>%
+  filter(allele_category == "6-8") %>%
+  pull(Locus)
+print(loci_lot.al)
+
+```
+
+### Make moire input
+
+```{r moire_input, echo=FALSE, warning = FALSE, message= FALSE}
+
+# Make moire input
+moire_input <- filtered_allele_data %>% 
+  select (sample_id, Locus, Allele, site) %>%
+  rename("locus" = "Locus") %>%
+  rename("allele" = "Allele") %>% 
+  distinct()
+
+
+moire_input_aa <- moire_input %>% 
+  filter(site == "Asayita")
+
+moire_input_ac <- moire_input %>% 
+  filter(site == "Gambella")
+
+moire_input_ba <- moire_input %>% 
+  filter(site == "Benshangul")
+
+moire_input_gm <- moire_input %>% 
+  filter(site == "Gondar")
+
+moire_input_mm <- moire_input %>% 
+  filter(site == "Mizan")
+
+write.csv(moire_input, "../data/Moire/Input/TES_moire_input_filtered.csv", row.names = F)
+write.csv(moire_input_aa, "../data/Moire/Input/TES_moire_input_filtered_aa.csv", row.names = F)
+write.csv(moire_input_ac, "../data/Moire/Input/TES_moire_input_filtered_ac.csv", row.names = F)
+write.csv(moire_input_ba, "../data/Moire/Input/TES_moire_input_filtered_ba.csv", row.names = F)
+write.csv(moire_input_gm, "../data/Moire/Input/TES_moire_input_filtered_gm.csv", row.names = F)
+write.csv(moire_input_mm, "../data/Moire/Input/TES_moire_input_filtered_mm.csv", row.names = F)
+
+
+```

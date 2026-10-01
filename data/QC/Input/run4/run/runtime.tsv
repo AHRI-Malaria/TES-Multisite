@@ -1,0 +1,32 @@
+PipelineVersion	v0.2.1
+ContainerEngine	apptainer
+Duration	10h 7m 8s
+CommandLine	nextflow run main.nf --readDIR ../TES_fastq/run4/ --outDIR ./TES_run4_output/ --target v4 -profile slurm,apptainer --sequencer nextseq -config conf/custom.config
+CommitId	null
+Complete	2026-08-18T16:05:34.669899381-07:00
+ConfigFiles	/home/yisihak/madhatter_lshtm_server_clone/nextflow.config, /home/yisihak/madhatter_lshtm_server_clone/conf/custom.config
+Container	file://mad4hatter_sha-110d09e.sif
+ErrorMessage	null
+ErrorReport	null
+ExitStatus	0
+HomeDir	/home/yisihak
+LaunchDir	/home/yisihak/madhatter_lshtm_server_clone
+Manifest	nextflow.config.Manifest@79e15c4a
+Profile	slurm,apptainer
+ProjectDir	/home/yisihak/madhatter_lshtm_server_clone
+Repository	null
+Resume	false
+Revision	null
+RunName	trusting_escher
+ScriptFile	/home/yisihak/madhatter_lshtm_server_clone/main.nf
+ScriptId	943f264eaf1fff2f194fce608d409200
+ScriptName	main.nf
+SessionId	3cf10eb6-5ff9-4350-bc0d-9d6eaf350d16
+Start	2026-08-18T05:58:26.596931174-07:00
+StubRun	false
+Success	true
+UserName	yisihak
+WorkDir	/home/yisihak/madhatter_lshtm_server_clone/work
+NextflowBuild	11173
+NextflowTimestamp	10-02-2026 15:17 UTC
+NextflowVersion	25.10.4

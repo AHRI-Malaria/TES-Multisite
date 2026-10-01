@@ -1,0 +1,194 @@
+PipelineVersion	v0.2.1
+ContainerEngine	docker
+Duration	1m 38s
+CommandLine	nextflow run main.nf --readDIR ../TES_fastq/run9/ --outDIR ./TES_run9_output --target v4 -profile docker --sequencer nextseq -config conf/custom.config
+CommitId	null
+Complete	2026-08-19T00:06:15.036988864-07:00
+ConfigFiles	/home/yisihak/madhatter_lshtm_server_clone/nextflow.config, /home/yisihak/madhatter_lshtm_server_clone/conf/custom.config
+Container	eppicenter/mad4hatter:sha-110d09e
+ErrorMessage	null
+ErrorReport	Error executing process > 'DEMULTIPLEX_AMPLICONS:CUTADAPT (AA055-D0_S483)'
+
+Caused by:
+  Process `DEMULTIPLEX_AMPLICONS:CUTADAPT (AA055-D0_S483)` terminated with an error exit status (1)
+
+
+Command executed:
+
+  bash cutadapt_process.sh         -1 AA055-D0_S483_R1_001.fastq.gz         -2 AA055-D0_S483_R2_001.fastq.gz         -r rev_primers.fasta         -f fwd_primers.fasta         -m 100         -s nextseq         -e 0         -c 6         -o demultiplexed_fastqs
+
+Command exit status:
+  1
+
+Command output:
+  (empty)
+
+Work dir:
+  /home/yisihak/madhatter_lshtm_server_clone/work/88/95b69df6ac6bdf4c54ff41e9a8ca46
+
+Container:
+  eppicenter/mad4hatter:sha-110d09e
+
+Tip: when you have fixed the problem you can continue the execution adding the option `-resume` to the run command line
+ExitStatus	1
+HomeDir	/home/yisihak
+LaunchDir	/home/yisihak/madhatter_lshtm_server_clone
+Manifest	nextflow.config.Manifest@ed0e544
+Profile	docker
+ProjectDir	/home/yisihak/madhatter_lshtm_server_clone
+Repository	null
+Resume	false
+Revision	null
+RunName	silly_engelbart
+ScriptFile	/home/yisihak/madhatter_lshtm_server_clone/main.nf
+ScriptId	943f264eaf1fff2f194fce608d409200
+ScriptName	main.nf
+SessionId	2d3ad45e-31e3-4532-95bb-37fa76f36ffe
+Start	2026-08-19T00:04:37.241085366-07:00
+StubRun	false
+Success	false
+UserName	yisihak
+WorkDir	/home/yisihak/madhatter_lshtm_server_clone/work
+NextflowBuild	11173
+NextflowTimestamp	10-02-2026 15:17 UTC
+NextflowVersion	25.10.4
+PipelineVersion	v0.2.1
+ContainerEngine	docker
+Duration	1m 33s
+CommandLine	nextflow run main.nf --readDIR ../TES_fastq/run9/ --outDIR ./TES_run9_output --target v4 -profile docker --sequencer nextseq -config conf/custom.config
+CommitId	null
+Complete	2026-08-19T00:09:06.496525951-07:00
+ConfigFiles	/home/yisihak/madhatter_lshtm_server_clone/nextflow.config, /home/yisihak/madhatter_lshtm_server_clone/conf/custom.config
+Container	eppicenter/mad4hatter:sha-110d09e
+ErrorMessage	null
+ErrorReport	Error executing process > 'DEMULTIPLEX_AMPLICONS:CUTADAPT (AA043-D0_S481)'
+
+Caused by:
+  Process `DEMULTIPLEX_AMPLICONS:CUTADAPT (AA043-D0_S481)` terminated with an error exit status (1)
+
+
+Command executed:
+
+  bash cutadapt_process.sh         -1 AA043-D0_S481_R1_001.fastq.gz         -2 AA043-D0_S481_R2_001.fastq.gz         -r rev_primers.fasta         -f fwd_primers.fasta         -m 100         -s nextseq         -e 0         -c 6         -o demultiplexed_fastqs
+
+Command exit status:
+  1
+
+Command output:
+  (empty)
+
+Work dir:
+  /home/yisihak/madhatter_lshtm_server_clone/work/25/9e158d7be3afbeeb146c4add2bb5dd
+
+Container:
+  eppicenter/mad4hatter:sha-110d09e
+
+Tip: you can try to figure out what's wrong by changing to the process work dir and showing the script file named `.command.sh`
+ExitStatus	1
+HomeDir	/home/yisihak
+LaunchDir	/home/yisihak/madhatter_lshtm_server_clone
+Manifest	nextflow.config.Manifest@41af8a79
+Profile	docker
+ProjectDir	/home/yisihak/madhatter_lshtm_server_clone
+Repository	null
+Resume	false
+Revision	null
+RunName	zen_almeida
+ScriptFile	/home/yisihak/madhatter_lshtm_server_clone/main.nf
+ScriptId	943f264eaf1fff2f194fce608d409200
+ScriptName	main.nf
+SessionId	cd235fcd-64db-4851-918d-cc6a30f32054
+Start	2026-08-19T00:07:33.811961439-07:00
+StubRun	false
+Success	false
+UserName	yisihak
+WorkDir	/home/yisihak/madhatter_lshtm_server_clone/work
+NextflowBuild	11173
+NextflowTimestamp	10-02-2026 15:17 UTC
+NextflowVersion	25.10.4
+PipelineVersion	v0.2.1
+ContainerEngine	docker
+Duration	1m 36s
+CommandLine	nextflow run main.nf --readDIR ../TES_fastq/run9/ --outDIR ./TES_run9_output --target v4 -profile docker --sequencer nextseq -config conf/custom.config
+CommitId	null
+Complete	2026-08-19T00:11:02.924738907-07:00
+ConfigFiles	/home/yisihak/madhatter_lshtm_server_clone/nextflow.config, /home/yisihak/madhatter_lshtm_server_clone/conf/custom.config
+Container	eppicenter/mad4hatter:sha-110d09e
+ErrorMessage	null
+ErrorReport	Error executing process > 'DEMULTIPLEX_AMPLICONS:CUTADAPT (NC_S493)'
+
+Caused by:
+  Process `DEMULTIPLEX_AMPLICONS:CUTADAPT (NC_S493)` terminated with an error exit status (1)
+
+
+Command executed:
+
+  bash cutadapt_process.sh         -1 NC_S493_R1_001.fastq.gz         -2 NC_S493_R2_001.fastq.gz         -r rev_primers.fasta         -f fwd_primers.fasta         -m 100         -s nextseq         -e 0         -c 6         -o demultiplexed_fastqs
+
+Command exit status:
+  1
+
+Command output:
+  (empty)
+
+Work dir:
+  /home/yisihak/madhatter_lshtm_server_clone/work/32/59b314e536a43b10f5c27e6d5b17b0
+
+Container:
+  eppicenter/mad4hatter:sha-110d09e
+
+Tip: you can try to figure out what's wrong by changing to the process work dir and showing the script file named `.command.sh`
+ExitStatus	1
+HomeDir	/home/yisihak
+LaunchDir	/home/yisihak/madhatter_lshtm_server_clone
+Manifest	nextflow.config.Manifest@1a4641e5
+Profile	docker
+ProjectDir	/home/yisihak/madhatter_lshtm_server_clone
+Repository	null
+Resume	false
+Revision	null
+RunName	fervent_volta
+ScriptFile	/home/yisihak/madhatter_lshtm_server_clone/main.nf
+ScriptId	943f264eaf1fff2f194fce608d409200
+ScriptName	main.nf
+SessionId	63d1b020-d604-40f6-83c6-a86c782b8564
+Start	2026-08-19T00:09:26.758862150-07:00
+StubRun	false
+Success	false
+UserName	yisihak
+WorkDir	/home/yisihak/madhatter_lshtm_server_clone/work
+NextflowBuild	11173
+NextflowTimestamp	10-02-2026 15:17 UTC
+NextflowVersion	25.10.4
+PipelineVersion	v0.2.1
+ContainerEngine	docker
+Duration	1h 5m 51s
+CommandLine	nextflow run main.nf --readDIR ../TES_fastq/run9/ --outDIR ./TES_run9_output --target v4 -profile docker --sequencer nextseq -config conf/custom.config
+CommitId	null
+Complete	2026-08-19T01:17:53.178842826-07:00
+ConfigFiles	/home/yisihak/madhatter_lshtm_server_clone/nextflow.config, /home/yisihak/madhatter_lshtm_server_clone/conf/custom.config
+Container	eppicenter/mad4hatter:sha-110d09e
+ErrorMessage	null
+ErrorReport	null
+ExitStatus	0
+HomeDir	/home/yisihak
+LaunchDir	/home/yisihak/madhatter_lshtm_server_clone
+Manifest	nextflow.config.Manifest@463a1f47
+Profile	docker
+ProjectDir	/home/yisihak/madhatter_lshtm_server_clone
+Repository	null
+Resume	false
+Revision	null
+RunName	sharp_allen
+ScriptFile	/home/yisihak/madhatter_lshtm_server_clone/main.nf
+ScriptId	943f264eaf1fff2f194fce608d409200
+ScriptName	main.nf
+SessionId	aeb00846-68b3-4e8f-912d-4fbe8028a0ca
+Start	2026-08-19T00:12:02.151407304-07:00
+StubRun	false
+Success	true
+UserName	yisihak
+WorkDir	/home/yisihak/madhatter_lshtm_server_clone/work
+NextflowBuild	11173
+NextflowTimestamp	10-02-2026 15:17 UTC
+NextflowVersion	25.10.4

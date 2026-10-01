@@ -1,0 +1,22 @@
+---
+title: "QC summary Report"
+author: "GenMoz"
+date: 2026-08-19
+output: html_document
+---
+
+```{r echo=FALSE, results='asis', message=FALSE, warning=FALSE}
+plot_list=readRDS(file)
+knitr::kable(plot_list[1], caption="Cutadapt Sample Statistics")
+```
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+plot_list=readRDS(file)
+knitr::kable(plot_list[2], caption="Sample Median Reads per Pool")
+```
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+plot_list=readRDS(file)
+knitr::kable(plot_list[3], caption="Sample Number of Loci with 100 Reads or More per Pool")
+```
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+plot_list[-c(1:3)]
+```

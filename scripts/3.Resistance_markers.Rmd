@@ -1,0 +1,670 @@
+---
+title: "TES snp report"
+author: "yisihak"
+date: "2025-02-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+
+library(dplyr)
+library(magrittr)
+library(reshape2)
+library(tidyr)
+library(tidyverse)
+library(writexl)
+library(openxlsx)
+
+```
+
+
+
+```{r}
+res_mark_run4 <- read.table("../data/QC/Input/run4/resistance_marker_module/resmarker_table_by_locus.txt", sep = "\t", header = T)
+
+res_mark_run4$SampleID <- gsub("_S.*","",res_mark_run4$SampleID)
+
+res_mark_run4 <- res_mark_run4 %>% 
+  group_by(SampleID, Gene, CodonID,RefAA, AA,AARefAlt) %>%
+  mutate(Reads = sum(Reads)) %>%
+  ungroup() %>%
+  select(-Locus,-GeneID,-RefCodon,-Codon,-CodonRefAlt) %>%
+  distinct() %>%
+  group_by(SampleID, Gene, CodonID) %>% 
+  mutate(Read_locus = sum(Reads)) %>% 
+  filter(Read_locus > 10) %>% 
+  filter(Reads >= 5) %>% 
+  ungroup()
+  
+  
+
+res_mark_run5 <- read.table("../data/QC/Input/run5/resistance_marker_module/resmarker_table_by_locus.txt", sep = "\t", header = T)
+
+res_mark_run5$SampleID <- gsub("_S.*","",res_mark_run5$SampleID) 
+
+res_mark_run5 <- res_mark_run5 %>% 
+  group_by(SampleID, Gene, CodonID,RefAA, AA,AARefAlt) %>%
+  mutate(Reads = sum(Reads)) %>%
+  ungroup() %>%
+  select(-Locus,-GeneID,-RefCodon,-Codon,-CodonRefAlt) %>%
+  distinct() %>%
+  group_by(SampleID, Gene, CodonID) %>% 
+  mutate(Read_locus = sum(Reads)) %>% 
+  filter(Read_locus > 10) %>% 
+  filter(Reads >= 5) %>% 
+  ungroup()
+  
+  
+
+res_mark_run9 <- read.table("../data/QC/Input/run9/resistance_marker_module/resmarker_table_by_locus.txt", sep = "\t", header = T)
+
+res_mark_run9$SampleID <- gsub("_S.*","",res_mark_run9$SampleID) 
+
+res_mark_run9 <- res_mark_run9 %>% 
+  group_by(SampleID, Gene, CodonID,RefAA, AA,AARefAlt) %>%
+  mutate(Reads = sum(Reads)) %>%
+  ungroup() %>%
+  select(-Locus,-GeneID,-RefCodon,-Codon,-CodonRefAlt) %>%
+  distinct() %>%
+  group_by(SampleID, Gene, CodonID) %>% 
+  mutate(Read_locus = sum(Reads)) %>% 
+  filter(Read_locus > 10) %>% 
+  filter(Reads >= 5) %>% 
+  ungroup()
+  
+  
+
+res_mark_combined <- rbind(res_mark_run4,res_mark_run5,res_mark_run9) %>% 
+  filter(!grepl("3D7", SampleID)) %>%
+  select(SampleID, Gene, CodonID, RefAA, AA, AARefAlt, Reads) %>% 
+  group_by(SampleID, Gene, CodonID,RefAA, AA,AARefAlt) %>%
+  mutate(Reads = sum(Reads)) %>%
+  ungroup() %>%
+  distinct()
+
+
+
+res_mark_both_run <- res_mark_combined %>%
+  mutate(AA_Change = paste0(RefAA,CodonID)) %>% 
+  group_by(SampleID, Gene, CodonID) %>%
+  mutate(
+    total_read = sum(Reads),
+    alt_read = sum(ifelse(AARefAlt == "ALT", Reads, 0)),
+    ref_read = sum(ifelse(AARefAlt == "REF", Reads, 0)),
+    has_alt = any(AARefAlt == "ALT"),
+    has_ref = any(AARefAlt == "REF"),
+    VAF = case_when(
+      has_alt & !has_ref ~ 100,
+      has_ref & !has_alt ~ 0,
+      has_alt & has_ref ~ round((alt_read / total_read) * 100, 2),
+      TRUE ~ NA_real_
+    )
+  ) %>% 
+  filter(
+    !(VAF >= 95 & AARefAlt == "REF"),  # remove REF if ALT dominates
+    !(VAF <= 5 & AARefAlt == "ALT")    # remove ALT if REF dominates
+  ) %>%
+  ungroup() %>% 
+  select(-total_read,-alt_read,-ref_read,-has_alt,-has_ref) %>% 
+  mutate(VAF_ = paste0(RefAA,CodonID,"_VAF")) %>% 
+  mutate(VAF = as.character(VAF))
+
+
+
+piv <- function(df){
+  df <- df %>% 
+  pivot_wider(names_from = AA_Change, values_from = AA, values_fill = "NA") %>% 
+  pivot_wider(names_from = VAF_, values_from = VAF, values_fill = "NA")
+  return(df)
+}
+
+
+
+return_non_NA <- function(column) {
+  # Remove NA values from the column
+  non_na_values <- column[column != "NA"]
+  # Check conditions and return the appropriate value
+  if (length(non_na_values) == 0) {
+    return(NA) }
+  else if (length(non_na_values) == 1) {
+    return(non_na_values[1]) }
+  else {
+    return(paste(non_na_values, collapse = "/"))
+   }
+  }
+
+
+row_merge_aa <- function(df){
+  df <- df %>% 
+  select(-CodonID) %>% 
+  group_by(SampleID) %>%
+  reframe(
+    Gene = first(Gene),
+    across(all_of(grep("[A-Z][0-9].*", names(df), value = TRUE)), return_non_NA))
+  
+}
+
+sort_col <- function(df){
+  # Get column names
+  col_names <- colnames(df)
+  
+  # Extract columns matching the pattern
+  pattern_cols <- str_subset(col_names, "^[a-zA-Z][0-9]+?")
+  
+  # Extract numeric part for sorting
+  numeric_part <- str_extract(pattern_cols, "\\d+")
+  
+  # Order pattern columns based on the numeric part
+  sorted_pattern_cols <- pattern_cols[order(as.numeric(numeric_part))]
+  
+  # Combine sorted pattern columns with others
+  sorted_col_names <- c(setdiff(col_names, pattern_cols),sorted_pattern_cols)
+  
+  # Reorder the dataframe based on the sorted column names
+  df_sorted <- df %>%
+    select(all_of(sorted_col_names))
+      return(df_sorted)
+}
+
+
+# Function to concatenate values with specific conditions
+concat_values <- function(df) {
+  # Initialize an empty vector to store concatenated values
+  concatenated_values <- vector("character", nrow(df))
+  
+  # Loop over each row
+  for (i in 1:nrow(df)) {
+    # # Get the values excluding the first two columns
+    # row_values <- df[i, -c(1, 2)]
+    
+    # Get column indices to exclude
+    exclude_cols <- c(1, 2, which(grepl("_VAF$", names(df))))
+    
+    # Filter the row, excluding those columns
+    row_values <- df[i, -exclude_cols]
+
+    # Substitute NA with "-"
+    row_values[is.na(row_values)] <- "-"
+    
+    # First round: take single letters or the first letter before '_'
+    first_round <- sapply(row_values, function(value) {
+      if (grepl("/", value)) {
+        return(substring(value, 1, 1))
+      } else {
+        return(value)
+      }
+    })
+    
+    # Second round: take single letters or the second letter after '_'
+    second_round <- sapply(row_values, function(value) {
+      if (grepl("/", value)) {
+        return(substring(value, nchar(value), nchar(value)))
+      } else {
+        return(value)
+      }
+    })
+     if (paste(first_round, collapse = "/") == paste(second_round, collapse = "/")){
+       concatenated_values[i] <- paste(first_round, collapse = "/")
+     }else{
+       # Concatenate both rounds with "/" and separate them by "-"
+    concatenated_values[i] <- paste(paste(first_round, collapse = "/"), paste(second_round, collapse = "/"), sep = "-")
+     }
+    
+  }
+  
+  # Add the concatenated values as a new column in the data frame
+  df$Microhaplotype <- concatenated_values
+  
+  return(df)
+}
+
+
+clean_VAF_columns <- function(df) {
+  vaf_cols <- grep("_VAF$", names(df), value = TRUE)
+  
+  df[vaf_cols] <- lapply(df[vaf_cols], function(col) {
+    if (is.factor(col)) col <- as.character(col)  # Ensure character
+    sub("/.*", "", col)  # Remove '/' and everything after
+  })
+  
+  return(df)
+}
+
+
+split_aa <- split(res_mark_both_run, res_mark_both_run$Gene)
+
+res_li <- lapply(split_aa, piv)
+res_merge <- lapply(res_li, row_merge_aa)
+res_sort <- lapply(res_merge, sort_col)
+res_hap <- lapply(res_sort, concat_values)
+res_hap <- lapply(res_hap, function(df) {
+  df$Microhaplotype <- gsub("([^/]+)/([^/]+)", "\\1/\\2", df$Microhaplotype) # normalize
+  df$Microhaplotype <- gsub("ALT/REF", "REF/ALT", df$Microhaplotype)
+  df
+})
+res_clean <- lapply(res_hap, clean_VAF_columns)
+# test <- res_clean[[7]]
+
+
+crt_df <- res_clean[[2]]
+dhfr_df <- res_clean[[3]]
+dhps_df <- res_clean[[4]]
+k13_df <- res_clean[[7]]
+mdr1_df <- res_clean[[8]]
+
+# Rename column 'G437' to 'A437'
+names(dhps_df)[names(dhps_df) == "G437"] <- "A437"
+
+cols_crt <- c("C72", "V73", "M74", "N75", "K76")
+cols_dhfr <- c("A16", "N51", "C59", "S108", "I164", "T185")
+# cols_dhfr <- c("N51", "C59", "S108", "I164")
+cols_dhps <- c("I431","S436", "A437", "K540", "A581", "A613")
+# cols_dhps <- c("S436", "A437", "K540", "A581", "A613")
+cols_k13 <- c("A578", "R622", "A675")
+cols_mdr1 <- c("N86", "Y184", "S1034", "N1042", "D1246")
+
+
+# assigns mutation status for the haplotype
+get_mutation_type <- function(row, cols) {
+  values <- as.character(row[cols])
+  col_initials <- substr(cols, 1, 1)
+  
+  if (all(values == "-")) return("NA")
+  if (any(grepl("/", values))) return("mixed")
+  
+  is_wild <- mapply(function(val, init) val == init, values, col_initials)
+  is_na <- values == "-"
+  is_mutant <- mapply(function(val, init) val != init & val != "-", values, col_initials)
+  
+  if (all(is_wild)) return("wildtype")
+  if (any(is_wild) & any(is_na) & !any(is_mutant)) return("NA")
+  if (any(is_mutant)) return("mutant")
+  
+  return("NA")
+}
+
+#assign mutation status for snps
+get_snp_status <- function(df, cols) {
+  for (col in cols) {
+    ref_aa <- substr(col, 1, 1)  # first letter of col name is the reference AA
+    new_col <- paste0(col, "_status")
+    
+    df[[new_col]] <- sapply(df[[col]], function(val) {
+      if (val == "-") {
+        return("NA")
+      } else if (grepl("/", val)) {
+        return("mixed")
+      } else if (val == ref_aa) {
+        return("wildtype")
+      } else {
+        return("mutant")
+      }
+    })
+  }
+  return(df)
+}
+
+
+# replace NA values with "-"
+crt_df[cols_crt] <- lapply(crt_df[cols_crt], function(col) {
+  col[is.na(col)] <- "-"
+  col
+})
+
+crt_df$Microhaplotype <- gsub("/", "", crt_df$Microhaplotype)
+
+# Create haplotype_stat column
+crt_df$haplotype_stat <- apply(crt_df[, cols_crt], 1, function(row) {
+  if (any(row == "-")) "partial" else "complete"
+})
+
+# SNP level mutation status assignment
+crt_df <- get_snp_status(crt_df, cols_crt)
+
+# Apply to each row using anonymous function to pass `cols`
+crt_df$mutation_type <- apply(crt_df, 1, function(row) get_mutation_type(row, cols_crt))
+
+###############################################################################################
+
+dhfr_df[cols_dhfr] <- lapply(dhfr_df[cols_dhfr], function(col) {
+  col[is.na(col)] <- "-"
+  col
+})
+
+dhfr_df$Microhaplotype <- gsub("/", "", dhfr_df$Microhaplotype)
+
+dhfr_df$haplotype_stat <- apply(dhfr_df[, cols_dhfr], 1, function(row) {
+  if (any(row == "-")) "partial" else "complete"
+})
+
+# SNP level mutation status assignment
+dhfr_df <- get_snp_status(dhfr_df, cols_dhfr)
+
+dhfr_df$mutation_type <- apply(dhfr_df, 1, function(row) get_mutation_type(row, cols_dhfr))
+
+##################################################################################################
+
+
+dhps_df[cols_dhps] <- lapply(dhps_df[cols_dhps], function(col) {
+  col[is.na(col)] <- "-"
+  col
+})
+
+dhps_df$Microhaplotype <- gsub("/", "", dhps_df$Microhaplotype)
+
+
+dhps_df$haplotype_stat <- apply(dhps_df[, cols_dhps], 1, function(row) {
+  if (any(row == "-")) "partial" else "complete"
+})
+
+# SNP level mutation status assignment
+dhps_df <- get_snp_status(dhps_df, cols_dhps)
+
+dhps_df$mutation_type <- apply(dhps_df, 1, function(row) get_mutation_type(row, cols_dhps))
+
+#############################################################################################
+
+k13_df[cols_k13] <- lapply(k13_df[cols_k13], function(col) {
+  col[is.na(col)] <- "-"
+  col
+})
+
+k13_df %<>% select(SampleID,A578,A578_VAF,R622,R622_VAF,A675,A675_VAF)
+
+k13_df$A578_type <- apply(k13_df, 1, function(row) get_mutation_type(row, c("A578")))
+k13_df$R622_type <- apply(k13_df, 1, function(row) get_mutation_type(row, c("R622")))
+k13_df$A675_type <- apply(k13_df, 1, function(row) get_mutation_type(row, c("A675")))
+
+############################################################################################
+
+mdr1_df[cols_mdr1] <- lapply(mdr1_df[cols_mdr1], function(col) {
+  col[is.na(col)] <- "-"
+  col
+})
+
+mdr1_df$Microhaplotype <- gsub("/", "", mdr1_df$Microhaplotype)
+
+mdr1_df$haplotype_stat <- apply(mdr1_df[, cols_mdr1], 1, function(row) {
+  if (any(row == "-")) "partial" else "complete"
+})
+
+# SNP level mutation status assignment
+mdr1_df <- get_snp_status(mdr1_df, cols_mdr1)
+
+mdr1_df$mutation_type <- apply(mdr1_df, 1, function(row) get_mutation_type(row, cols_mdr1))
+
+#################################################################################################
+
+
+# Create a new workbook
+wb <- createWorkbook()
+
+# Add each data frame as a new sheet
+
+addWorksheet(wb, "crt")
+writeData(wb, "crt", crt_df)
+
+addWorksheet(wb, "dhfr")
+writeData(wb, "dhfr", dhfr_df)
+
+addWorksheet(wb, "dhps")
+writeData(wb, "dhps", dhps_df)
+
+addWorksheet(wb, "k13")
+writeData(wb, "k13", k13_df)
+
+addWorksheet(wb, "mdr1")
+writeData(wb, "mdr1", mdr1_df)
+
+
+
+# Save the workbook to an Excel file
+saveWorkbook(wb, "../data/Resistance_Markers/res_mark_raw.xlsx", overwrite = TRUE)
+
+
+```
+
+
+```{r}
+
+snp_summary <- read_csv("../data/Resistance_Markers/TES_mutlitsite_resmarker_haplotype_summary_5%101725.csv")
+  # mutate(across(where(is.character), ~ifelse(is.na(.) |. == "-", "NA", as.character(.))))
+
+construct_haplotype_fixed <- function(df, snps) {
+  # --- Group SNPs by gene ---
+  genes <- unique(sub(".*_", "", snps))
+  gene_groups <- split(snps, sub(".*_", "", snps))
+  
+  # Function to extract clean allele options (split mixed, handle NA)
+  parse_alleles <- function(a) {
+    if (is.na(a) || a == "NA" || a == "-") return("-")
+    if (grepl("/", a)) strsplit(a, "/")[[1]] else a
+  }
+  
+  # Function to get consistent haplotypes for one gene
+  get_gene_haplotypes <- function(allele_vec) {
+    alleles_split <- lapply(allele_vec, parse_alleles)
+    n_pos <- length(alleles_split)
+    
+    # If all missing, return "-"
+    if (all(sapply(alleles_split, function(x) all(x == "-")))) return("-")
+    
+    # Count how many positions have multiple alleles
+    mix_positions <- which(sapply(alleles_split, length) > 1)
+    
+    # If no mixed positions, single haplotype
+    if (length(mix_positions) == 0) {
+      return(paste0(sapply(alleles_split, `[`, 1), collapse = ""))
+    }
+    
+    # Ensure consistent mixed haplotypes (not all permutations)
+    n_haps <- max(sapply(alleles_split, length))
+    
+    haplotypes <- character(n_haps)
+    for (h in seq_len(n_haps)) {
+      hap <- sapply(seq_len(n_pos), function(i) {
+        alleles <- alleles_split[[i]]
+        if (length(alleles) == 1) {
+          alleles
+        } else {
+          # Alternate across possible alleles
+          alleles[(h - 1) %% length(alleles) + 1]
+        }
+      })
+      haplotypes[h] <- paste0(hap, collapse = "")
+    }
+    unique(haplotypes)
+  }
+  
+  # Function to determine haplotype mutation status
+  get_status <- function(status_vec) {
+    status_vec <- as.character(status_vec)
+    status_vec[status_vec == ""]   <- NA_character_
+    status_vec[status_vec == "NA"] <- NA_character_
+    
+    if (any(status_vec == "mixed", na.rm = TRUE)) return("mixed")
+    if (any(status_vec == "mutant", na.rm = TRUE)) return("mutant")
+    non_na <- status_vec[!is.na(status_vec)]
+    
+    if (length(non_na) == 0) return("NA")
+    if (all(non_na == "wildtype")) {
+      if (any(is.na(status_vec))) return("NA")
+      return("wildtype")
+    }
+    return("NA")
+  }
+  
+  haplo_data <- list()
+  haplo_status <- list()
+  
+  # --- Construct haplotypes per gene ---
+  for (gene in names(gene_groups)) {
+    snp_cols <- gene_groups[[gene]]
+    snp_status_cols <- paste0(sub("_.*", "", snp_cols), "_status")
+    
+    haplo_data[[gene]] <- apply(df[snp_cols], 1, get_gene_haplotypes)
+    haplo_status[[gene]] <- apply(df[snp_status_cols], 1, get_status)
+  }
+  
+  # --- Combine across genes ---
+  if (length(gene_groups) == 1) {
+    gene <- names(gene_groups)
+    haplo_colname <- paste0("Pf", gene)
+    
+    df[[haplo_colname]] <- sapply(haplo_data[[gene]], function(h) paste(h, collapse = "|"))
+    df[[paste0(haplo_colname, "_status")]] <- haplo_status[[gene]]
+    
+  } else {
+    all_genes <- names(gene_groups)
+    combined_haplos <- vector("list", nrow(df))
+    
+    for (i in seq_len(nrow(df))) {
+      combos <- haplo_data[[all_genes[1]]][[i]]
+      for (g in all_genes[-1]) {
+        next_gene_haps <- haplo_data[[g]][[i]]
+        combos <- as.vector(outer(combos, next_gene_haps, paste, sep = "/"))
+      }
+      combined_haplos[[i]] <- paste(unique(combos), collapse = "|")
+    }
+    
+    haplo_colname <- paste0("Pf", paste(all_genes, collapse = "_"))
+    df[[haplo_colname]] <- unlist(combined_haplos)
+    
+    combined_status <- apply(as.data.frame(haplo_status), 1, get_status)
+    df[[paste0(haplo_colname, "_status")]] <- combined_status
+  }
+  
+  return(df)
+}
+
+
+
+snps_crt <- c("C72_crt","V73_crt","M74_crt","N75_crt","K76_crt")
+
+snps_dhfr <- c("A16_dhfr", "N51_dhfr", "C59_dhfr", "S108_dhfr", "I164_dhfr", "T185_dhfr")
+snps_dhfr2 <- c("N51_dhfr", "C59_dhfr", "S108_dhfr", "I164_dhfr")
+snps_dhfr3 <- c("N51_dhfr", "C59_dhfr", "S108_dhfr")
+
+snps_dhps <- c("I431_dhps","S436_dhps", "A437_dhps", "K540_dhps", "A581_dhps", "A613_dhps")
+snps_dhps1 <- c("S436_dhps", "A437_dhps", "K540_dhps", "A581_dhps", "A613_dhps")
+
+snps_dhfr_dhps <- c("N51_dhfr", "C59_dhfr", "S108_dhfr","A437_dhps")
+snps_dhfr_dhps1<- c("N51_dhfr", "C59_dhfr", "S108_dhfr","A437_dhps","K540_dhps")
+snps_dhfr_dhps2<- c("N51_dhfr", "C59_dhfr", "S108_dhfr","A437_dhps","K540_dhps","A581_dhps")
+snps_dhfr_dhps3<- c("N51_dhfr", "C59_dhfr", "S108_dhfr","I164_dhfr","A437_dhps","K540_dhps","A581_dhps")
+snps_dhfr_dhps4<- c("N51_dhfr", "C59_dhfr", "S108_dhfr","I164_dhfr","A437_dhps","K540_dhps")
+
+
+snps_k13 <- c("A578_k13", "R622_k13", "A675_k13")
+snps_k131 <- c("R622_k13", "A675_k13")
+
+snps_mdr1 <- c("N86_mdr1", "Y184_mdr1", "S1034_mdr1", "N1042_mdr1", "D1246_mdr1")
+
+
+# Function to canonicalize mixed haplotypes with optional wildtype first
+normalize_haplotypes <- function(haplo_col, sep = "|", wt_haplo = NULL) {
+  sapply(haplo_col, function(h) {
+    # Split mixed haplotypes
+    parts <- unlist(strsplit(h, split = sep, fixed = TRUE))
+    # Remove duplicates and empty strings
+    parts <- unique(parts[!is.na(parts) & parts != ""])
+    
+    # Sort alphabetically
+    parts_sorted <- sort(parts)
+    
+    # If a wildtype haplotype is provided and present, place it first
+    if (!is.null(wt_haplo) && wt_haplo %in% parts_sorted) {
+      parts_sorted <- c(wt_haplo, setdiff(parts_sorted, wt_haplo))
+    }
+    
+    # Recombine into string
+    paste(parts_sorted, collapse = sep)
+  })
+}
+
+
+
+
+
+crt <- construct_haplotype_fixed(snp_summary, snps_crt) %>%
+  select(1,(ncol(.)-1):ncol(.))
+# standardize the haplotype with wildtype first
+crt$Pfcrt <- normalize_haplotypes(crt$Pfcrt, sep = "|", wt_haplo = "CVMNK")
+
+
+dhfr <- construct_haplotype_fixed(snp_summary, snps_dhfr) %>%
+  select(1,(ncol(.)-1):ncol(.))
+dhfr$Pfdhfr <- normalize_haplotypes(dhfr$Pfdhfr, sep = "|", wt_haplo = "ANCSIT")
+
+dhfr2 <- construct_haplotype_fixed(snp_summary, snps_dhfr2) %>%
+  select(1,(ncol(.)-1):ncol(.))
+dhfr2$Pfdhfr <- normalize_haplotypes(dhfr2$Pfdhfr, sep = "|", wt_haplo = "NCSI")
+
+dhfr3 <- construct_haplotype_fixed(snp_summary, snps_dhfr3) %>%
+  select(1,(ncol(.)-1):ncol(.))
+dhfr3$Pfdhfr <- normalize_haplotypes(dhfr3$Pfdhfr, sep = "|", wt_haplo = "NCS")
+
+dhps <- construct_haplotype_fixed(snp_summary, snps_dhps) %>%
+  select(1,(ncol(.)-1):ncol(.))
+dhps$Pfdhps <- normalize_haplotypes(dhps$Pfdhps, sep = "|", wt_haplo = "ISAKAA")
+
+dhps1 <- construct_haplotype_fixed(snp_summary, snps_dhps1) %>%
+  select(1,(ncol(.)-1):ncol(.))
+dhps1$Pfdhps <- normalize_haplotypes(dhps1$Pfdhps, sep = "|", wt_haplo = "SAKAA")
+
+dhfr_dhps <- construct_haplotype_fixed(snp_summary, snps_dhfr_dhps) %>%
+  select(1,(ncol(.)-1):ncol(.))
+dhfr_dhps$Pfdhfr_dhps <- normalize_haplotypes(dhfr_dhps$Pfdhfr_dhps, sep = "|", wt_haplo = "NCS/A")
+
+dhfr_dhps1 <- construct_haplotype_fixed(snp_summary, snps_dhfr_dhps1) %>%
+  select(1,(ncol(.)-1):ncol(.))
+dhfr_dhps1$Pfdhfr_dhps <- normalize_haplotypes(dhfr_dhps1$Pfdhfr_dhps, sep = "|", wt_haplo = "NCS/AK")
+
+dhfr_dhps2 <- construct_haplotype_fixed(snp_summary, snps_dhfr_dhps2) %>%
+  select(1,(ncol(.)-1):ncol(.))
+dhfr_dhps2$Pfdhfr_dhps <- normalize_haplotypes(dhfr_dhps2$Pfdhfr_dhps, sep = "|", wt_haplo = "NCS/AKA")
+
+dhfr_dhps3 <- construct_haplotype_fixed(snp_summary, snps_dhfr_dhps3) %>%
+  select(1,(ncol(.)-1):ncol(.))
+dhfr_dhps3$Pfdhfr_dhps <- normalize_haplotypes(dhfr_dhps3$Pfdhfr_dhps, sep = "|", wt_haplo = "NCSI/AKA")
+
+dhfr_dhps4 <- construct_haplotype_fixed(snp_summary, snps_dhfr_dhps4) %>%
+  select(1,(ncol(.)-1):ncol(.))
+dhfr_dhps4$Pfdhfr_dhps <- normalize_haplotypes(dhfr_dhps4$Pfdhfr_dhps, sep = "|", wt_haplo = "NCSI/AK")
+
+k13 <- construct_haplotype_fixed(snp_summary, snps_k13) %>%
+  select(1,(ncol(.)-1):ncol(.))
+k13$Pfk13 <- normalize_haplotypes(k13$Pfk13, sep = "|", wt_haplo = "ARA")
+
+k131 <- construct_haplotype_fixed(snp_summary, snps_k131) %>%
+  select(1,(ncol(.)-1):ncol(.))
+k131$Pfk13 <- normalize_haplotypes(k131$Pfk13, sep = "|", wt_haplo = "RA")
+
+mdr1 <- construct_haplotype_fixed(snp_summary, snps_mdr1) %>%
+  select(1,(ncol(.)-1):ncol(.))
+mdr1$Pfmdr1 <- normalize_haplotypes(mdr1$Pfmdr1, sep = "|", wt_haplo = "NYSND")
+
+
+
+
+
+
+hap <- list(crt,dhfr,dhfr2,dhfr3,dhps,dhps1,dhfr_dhps,dhfr_dhps1,dhfr_dhps2,dhfr_dhps3,dhfr_dhps4,k13,k131,mdr1)
+
+merged_df <- reduce(hap, full_join, by = "SampleID") %>% 
+  rename("Pfdhfr(sextuple)"="Pfdhfr.x", "Pfdhfr_status(sextuple)"="Pfdhfr_status.x", "Pfdhfr(quadruple)" = "Pfdhfr.y", "Pfdhfr_status(quadruple)"="Pfdhfr_status.y", "Pfdhfr(triple)" = "Pfdhfr", "Pfdhfr_status(triple)" = "Pfdhfr_status", "Pfdhps(sextuple)" = "Pfdhps.x", "Pfdhps_status(sextuple)"="Pfdhps_status.x", "Pfdhps(quintuple)" ="Pfdhps.y", "Pfdhps_status(quintuple)"="Pfdhps_status.y", "Pfdhfr_dhps(quadruple)"="Pfdhfr_dhps.x", "Pfdhfr_dhps_status(quadruple)"="Pfdhfr_dhps_status.x", "Pfdhfr_dhps(quintuple)"="Pfdhfr_dhps.y", "Pfdhfr_dhps_status(quintuple)" = "Pfdhfr_dhps_status.y", "Pfdhfr_dhps(sextuple)"="Pfdhfr_dhps.x.x", "Pfdhfr_dhps_status(sextuple)"="Pfdhfr_dhps_status.x.x", "Pfdhfr_dhps(septuple)"="Pfdhfr_dhps.y.y", "Pfdhfr_dhps_status(septuple)"="Pfdhfr_dhps_status.y.y", "Pfdhfr_dhps(sextuple)1" = "Pfdhfr_dhps", "Pfdhfr_dhps_status(sextuple)1"="Pfdhfr_dhps_status", "Pfk13_622_675" ="Pfk13.y", "Pfk13_status_622_675"="Pfk13_status.y")
+
+write_csv(merged_df,"../data/Resistance_Markers/TES_mutlitsite_resmarker_report.csv")
+
+
+
+
+```
+
+
+
